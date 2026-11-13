@@ -1,0 +1,15 @@
+# Socle commun (thème, options, démarrage, chemins, construction de l'exécutable).
+# En développement, l'installer depuis sa copie locale :
+#     pip install -e ..\qtsocle
+# Pour figer une version, remplacer par l'adresse du dépôt et son étiquette :
+#     qtsocle @ git+https://<adresse du dépôt>/qtsocle@v0.1.0
+
+# Versions de l'environnement de développement (Python 3.11)
+PyQt6==6.4.2
+pyqtgraph==0.13.3
+pyqtdarktheme==2.1.0
+numpy>=1.24
+scipy>=1.11
+# tests et exécutable
+pytest>=8
+pyinstaller>=6

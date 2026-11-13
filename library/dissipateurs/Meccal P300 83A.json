@@ -1,0 +1,21 @@
+{
+ "format": "CoolingTool dissipateur v1",
+ "name": "P300 83A",
+ "manufacturer": "Mecc.Al",
+ "width_mm": 300,
+ "height_mm": 83,
+ "base_mm": 11.7,
+ "mass_kg_per_m": 23.07,
+ "conductivity_W_mK": 200,
+ "rth": {
+  "length_mm": 300,
+  "natural_K_W": 0.23,
+  "natural_delta_T_K": 70,
+  "forced_K_W": 0.078,
+  "forced_speed_m_s": 3.0,
+  "source_coverage": 0.5
+ },
+ "curves": "meccal_air",
+ "source": "Catalogue Mecc.Al « Air Cooled Technologies », série P, p. 29",
+ "notes": "Profil voisin du KL-271. Pas d'ailettes 13,7 mm, ailettes de rive 6 mm. Conductivité : 200 W/m.K retenus pour un alliage 6060/6063 (le catalogue annonce 220)."
+}
