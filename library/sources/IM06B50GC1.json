@@ -1,0 +1,13 @@
+{
+ "format": "CoolingTool source v1",
+ "name": "IM06B50GC1",
+ "manufacturer": "Infineon",
+ "package": "DIP 36x21D",
+ "size_x_mm": 21.0,
+ "size_y_mm": 36.0,
+ "power_W": 40,
+ "rth_jc_K_W": 0.0,
+ "rth_cs_K_W": 0.0,
+ "tj_max_C": null,
+ "notes": "Module IPM surmoulé isolé. Dimensions nominales tirées du nom du boîtier (DIP 36x21D, fiche Infineon V1.20). Dimensions à vérifier sur le plan du boîtier."
+}

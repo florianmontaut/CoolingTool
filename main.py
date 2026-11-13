@@ -20,7 +20,8 @@ def main() -> int:
     # depuis l'exécutable : %APPDATA%\CoolingTool
     data_dir = paths.user_data_dir(APP_NAME, dev_root=ROOT / "donnees_locales")
     theme.add_icon_dir(RESSOURCES / "icons")
-    return app.run(MainWindow, lambda window: MainController(window, data_dir),
+    return app.run(MainWindow,
+                   lambda window: MainController(window, data_dir, ROOT / "library"),
                    name=APP_NAME, version=__version__,
                    icon=RESSOURCES / "icons" / "icon.ico",
                    log_file=data_dir / "erreurs.log")

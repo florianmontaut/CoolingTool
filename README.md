@@ -3,7 +3,8 @@
 Simulation thermique 2D d'un dissipateur portant des sources de chaleur : repérer les
 points chauds dus au placement des composants ou à un flux de chaleur trop fort.
 
-État : le moteur de calcul est écrit et testé ; l'interface graphique reste à faire.
+État : moteur de calcul et première interface (scène, sources déplaçables, calcul en
+direct). La table de librairie et l'enregistrement des projets restent à faire.
 
 ## Lancer
 
@@ -43,6 +44,7 @@ hypothèses.
 
 - `library/dissipateurs/` : une fiche JSON par profilé (dimensions, Rth du catalogue).
 - `library/courbes/` : abaques de correction (vitesse d'air, longueur) d'un catalogue.
+- `library/sources/` : modèles de sources de chaleur (empreinte, pertes et Rth par défaut).
 
 ## Construire l'exécutable
 

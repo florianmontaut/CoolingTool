@@ -10,8 +10,8 @@ def schema(default_library: str) -> dict:
         "Général": {
             "type": "group",
             "children": {
-                # par défaut dans le dossier de données de l'utilisateur ; à régler vers
-                # un dossier partagé pour une librairie commune
+                # par défaut la librairie livrée avec l'application ; pas encore pris en
+                # compte (étape « librairie » de l'interface)
                 "Répertoire de la librairie": {
                     "type": "file",
                     "fileMode": "Directory",

@@ -1,0 +1,13 @@
+{
+ "format": "CoolingTool source v1",
+ "name": "EasyPACK 2B",
+ "manufacturer": "Infineon",
+ "package": "Easy 2B",
+ "size_x_mm": 48.0,
+ "size_y_mm": 56.7,
+ "power_W": 100,
+ "rth_jc_K_W": 0.0,
+ "rth_cs_K_W": 0.0,
+ "tj_max_C": null,
+ "notes": "Sans semelle : boîtier 56,7 × 48 mm (valeurs usuelles, non relevées sur un plan). La céramique en contact avec le dissipateur est plus petite que le boîtier. Dimensions à vérifier sur le plan du boîtier."
+}

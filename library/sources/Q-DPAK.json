@@ -1,0 +1,13 @@
+{
+ "format": "CoolingTool source v1",
+ "name": "Q-DPAK",
+ "manufacturer": "Infineon",
+ "package": "PG-HDSOP-22-3",
+ "size_x_mm": 15.4,
+ "size_y_mm": 15.0,
+ "power_W": 15,
+ "rth_jc_K_W": 0.0,
+ "rth_cs_K_W": 0.0,
+ "tj_max_C": null,
+ "notes": "Refroidi par le dessus. Corps 15 × 15,4 mm, repris de la variante PG-HDSOP-22-101 faute du plan de la 22-3. La plage de cuivre en contact est plus petite que le corps : renseigner Rth boîtier-dissipateur. Dimensions à vérifier sur le plan du boîtier."
+}

@@ -1,0 +1,13 @@
+{
+ "format": "CoolingTool source v1",
+ "name": "Module 34 mm",
+ "manufacturer": "Standard industriel",
+ "package": "34 mm",
+ "size_x_mm": 34.0,
+ "size_y_mm": 94.0,
+ "power_W": 150,
+ "rth_jc_K_W": 0.0,
+ "rth_cs_K_W": 0.0,
+ "tj_max_C": null,
+ "notes": "Semelle cuivre 94 × 34 mm (valeurs usuelles du standard, non relevées sur un plan). Dimensions à vérifier sur le plan du boîtier."
+}

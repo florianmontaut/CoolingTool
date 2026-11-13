@@ -1,14 +1,20 @@
 """Outils communs aux tests de l'interface (sans écran)."""
-from qtsocle import testing
+import pathlib
+
+from qtsocle import testing, theme
 
 from controller.main_controller import MainController
 from view.main_window import MainWindow
 
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+LIBRARY = ROOT / "library"
+
 
 def make_controller(tmp_path):
-    """Contrôleur sur un dossier de données temporaire."""
+    """Contrôleur sur un dossier de données temporaire et la librairie du dépôt."""
     testing.get_app()
-    return MainController(MainWindow(), tmp_path)
+    theme.add_icon_dir(ROOT / "ressources" / "icons")      # comme main.py
+    return MainController(MainWindow(), tmp_path, LIBRARY)
 
 
 def dispose(ctrl):
