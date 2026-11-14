@@ -15,9 +15,13 @@ Dépôt : https://github.com/florianmontaut/CoolingTool (branche `main`).
 
 - Python 3.11, PyQt6 6.4.2, pyqtgraph 0.13.3, numpy, scipy, pytest (`requirements.txt`).
 - Interpréteur du poste : `..\..\env\Scripts\python.exe`.
-- Socle commun **qtsocle** (dépôt voisin, installé par `pip install -e ..\qtsocle`) :
-  thème, icônes, fenêtre d'options, démarrage, chemins, construction de l'exécutable.
-  Ne pas recopier son code ici : une correction du socle se fait dans qtsocle.
+- Socle commun **qtsocle** (https://github.com/florianmontaut/qtsocle) : thème, icônes,
+  fenêtre d'options, démarrage, chemins, construction de l'exécutable. Figé à
+  l'étiquette `v0.1.0` dans `requirements.txt` ; sur le poste de développement, la copie
+  voisine est installée par `pip install -e ..\qtsocle`, à relancer après tout
+  `pip install -r requirements.txt` (qui la remplace). Ne pas recopier son code ici :
+  une correction du socle se fait dans qtsocle, puis nouvelle étiquette et mise à jour
+  de `requirements.txt`.
 - Lancer : `python main.py`. Tests : `python -m pytest tests`. Exécutable : `build_exe.bat`.
 
 ## Architecture

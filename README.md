@@ -9,10 +9,17 @@ librairie, tableau de résultats, fichiers de projet). Non comparé à des mesur
 ## Lancer
 
 ```
-pip install -e ..\qtsocle
 pip install -r requirements.txt
 python main.py
 python -m pytest tests
+```
+
+`requirements.txt` installe le socle commun [qtsocle](https://github.com/florianmontaut/qtsocle)
+à la version figée (étiquette git). Pour modifier aussi le socle, installer ensuite sa
+copie locale, qui remplace cette version :
+
+```
+pip install -e ..\qtsocle
 ```
 
 ## Utiliser le moteur de calcul
