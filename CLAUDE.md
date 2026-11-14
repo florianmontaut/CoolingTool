@@ -36,13 +36,18 @@ Dépôt : https://github.com/florianmontaut/CoolingTool (branche `main`).
   `sources/*.json` (modèles de sources : empreinte et valeurs par défaut).
 - `view/scene.py` : `ThermalScene`, la semelle vue de dessus, sa carte de température et
   les sources (`SourceItem`, un `pg.ROI` retenu dans la semelle). Coordonnées en mm.
-- `view/main_window.py` : arborescence du projet à gauche, scène au centre, deux arbres
-  de paramètres à droite (élément sélectionné ; dissipateur, conditions, actions).
+  - `project.py` : `Project`, le fichier de projet (`*.cooling.json`, en mm). Le
+    dissipateur y est cité par son nom : il doit être dans la librairie à l'ouverture.
+- `view/main_window.py` : à gauche l'arborescence du projet puis la librairie (filtre et
+  table) ; au centre la scène puis le tableau de résultats ; à droite deux arbres de
+  paramètres (élément sélectionné ; dissipateur, conditions, actions).
 - `controller/main_controller.py` : tient le projet (dissipateur, longueur, sources,
   conditions), relance `simulate` à chaque changement, y compris pendant un déplacement
-  à la souris, et met à jour la scène, l'arborescence et les résultats.
+  à la souris, et met à jour la scène, l'arborescence et les résultats. Gère aussi la
+  librairie (option « Répertoire de la librairie ») et les fichiers de projet.
 - `tests/` : `reference_solver.py` est une seconde écriture du solveur (matrice creuse),
   comparée à la première ; les autres tests s'appuient sur des solutions analytiques.
+  `helpers.make_controller` remplace les dialogues du contrôleur.
 
 ## Choix de conception à respecter
 
@@ -65,6 +70,12 @@ Dépôt : https://github.com/florianmontaut/CoolingTool (branche `main`).
   taille ; `refresh` suffit après un déplacement.
 - Un changement venu du contrôleur vers les paramètres ou l'arbre se fait sous
   `self._updating`, sinon les signaux bouclent.
+- Toute modification du projet passe par `_set_modified()` (titre étoilé, question à la
+  fermeture). Les dialogues sont des méthodes à part (`_ask_open_path`, `_ask_save_path`,
+  `_ask_save_changes`, `_error`) : un dialogue appelé directement bloquerait les tests.
+- Option « Répertoire de la librairie » vide = librairie livrée. On n'y enregistre jamais
+  le chemin de la librairie livrée : dans l'exécutable il change à chaque lancement.
+  Une fiche illisible est ignorée et signalée dans la barre d'état.
 - Données de l'utilisateur dans le dossier donné par `qtsocle.paths.user_data_dir`,
   jamais à côté du code : dans l'exécutable, ce dossier-là est temporaire.
 - Fermeture : destruction ordonnée par `qtsocle.app.run`, modèles Qt parentés à leurs
@@ -88,7 +99,10 @@ Dépôt : https://github.com/florianmontaut/CoolingTool (branche `main`).
   aucune relevée sur un plan coté (voir le champ `notes` de chaque fiche). Pour les
   boîtiers sans semelle ou refroidis par le dessus, la surface de contact réelle est plus
   petite que le boîtier.
-- L'interface n'a été vue qu'en capture sans écran, pas manipulée à la souris.
+- Première interface (scène, paramètres) essayée et validée par l'utilisateur. La table
+  de librairie, le tableau de résultats et les fichiers de projet n'ont été vus par
+  Claude qu'en capture sans écran.
+- Librairie sur un vrai partage réseau.
 
 ## Limites connues
 
@@ -97,8 +111,9 @@ Dépôt : https://github.com/florianmontaut/CoolingTool (branche `main`).
 - Convection naturelle : pas de différence entre le haut et le bas du dissipateur.
 - Flux uniforme sous chaque source ; l'interface thermique est une résistance globale.
 - Dissipateurs extrudés seulement (pas d'ailettes rapportées, caloducs, plaques froides).
-- La librairie est celle du dépôt, embarquée dans l'exécutable ; l'option « Répertoire
-  de la librairie » n'est pas encore prise en compte.
-- Pas encore de table de librairie, d'enregistrement de projet, ni de tableau de
-  résultats (étape suivante de l'interface).
+- La librairie se lit seulement : pas d'édition ni de création de fiche depuis
+  l'interface (les fiches JSON se modifient à la main).
+- Un projet ne contient pas la fiche de son dissipateur : il ne s'ouvre pas sur un poste
+  dont la librairie ne l'a pas.
+- Pas d'annuler / rétablir, pas d'export des résultats ni de la carte.
 - Rien n'empêche deux sources de se chevaucher : leurs puissances s'additionnent.

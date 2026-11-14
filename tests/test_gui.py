@@ -43,7 +43,7 @@ def test_demarrage(ctrl):
     assert texts[0].startswith("P200 40A — 200 mm — max ")
     assert texts[1].startswith("Q1 — 300 W — Tj ")
     assert ctrl.view.scene.source_rect(0) == pytest.approx((69.3, 46.8, 61.4, 106.4))
-    assert ctrl.options["library_dir"] == str(ctrl.library_dir)
+    assert ctrl.options["library_dir"] == "" and ctrl.library_dir == ctrl.bundled_library
     assert project_param(ctrl, "Actions", mc.P_MODEL).opts["limits"] == [
         "EasyPACK 2B", "IM06B50GC1", "Module 34 mm", "Module 62 mm", "Q-DPAK", "TOLT"]
 
@@ -227,4 +227,4 @@ def test_reglages_enregistres_a_la_fermeture(tmp_path):
 
 def test_fenetre_d_options(ctrl):
     dialog = options_panel.OptionsPannel(ctrl.schema, ctrl.options, ctrl.view)
-    assert dialog.getOptions() == {"library_dir": str(ctrl.library_dir)}
+    assert dialog.getOptions() == {"library_dir": ""}

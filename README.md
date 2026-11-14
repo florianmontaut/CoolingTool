@@ -3,8 +3,8 @@
 Simulation thermique 2D d'un dissipateur portant des sources de chaleur : repérer les
 points chauds dus au placement des composants ou à un flux de chaleur trop fort.
 
-État : moteur de calcul et première interface (scène, sources déplaçables, calcul en
-direct). La table de librairie et l'enregistrement des projets restent à faire.
+État : moteur de calcul et interface (scène, sources déplaçables, calcul en direct,
+librairie, tableau de résultats, fichiers de projet). Non comparé à des mesures.
 
 ## Lancer
 

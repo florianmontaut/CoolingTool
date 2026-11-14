@@ -1,8 +1,9 @@
 # controller/main_controller.py
 """
 Contrôleur principal : tient le projet (dissipateur, longueur, sources, conditions),
-relance le calcul à chaque changement et met à jour la scène, l'arborescence et les
-paramètres. Le modèle est en SI ; l'interface en mm et °C.
+relance le calcul à chaque changement et met à jour la scène, l'arborescence, les
+paramètres et le tableau de résultats. Gère aussi la librairie et les fichiers de projet.
+Le modèle est en SI ; l'interface en mm et °C.
 """
 import dataclasses
 import pathlib
@@ -12,6 +13,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 
 from qtsocle import options_panel, settings, theme
 from model import library
+from model.project import EXTENSION, Project
 from model.simulation import (FORCED, NATURAL, CalibrationError, Conditions, Source,
                               simulate)
 from ressources import app_settings
@@ -20,7 +22,16 @@ MM = 1000.0
 DEFAULT_AMBIENT = 55.0              # °C, air au niveau des ailettes
 DEFAULT_MODEL = "Module 62 mm"
 CLONE_OFFSET = 0.010                # m
+LOW_MARGIN = 10.0                   # K : marge sur Tj max signalée en orange en dessous
+WARNING_COLOR = "#E08A00"
 INDEX_ROLE = QtCore.Qt.ItemDataRole.UserRole + 1
+KIND_ROLE = QtCore.Qt.ItemDataRole.UserRole + 2     # librairie : type de fiche
+NAME_ROLE = QtCore.Qt.ItemDataRole.UserRole + 3     # librairie : nom de la fiche
+KIND_HEATSINK, KIND_SOURCE = "Dissipateur", "Source"
+LIBRARY_HEADERS = ["Type", "Nom", "Fabricant", "Dimensions", "Données"]
+RESULT_HEADERS = ["Source", "Pertes (W)", "Semelle moy. (°C)", "Semelle max (°C)",
+                  "Boîtier (°C)", "Jonction (°C)", "Tj max (°C)", "Marge (K)"]
+PROJECT_FILTER = f"Projet CoolingTool (*{EXTENSION});;Tous les fichiers (*)"
 
 # noms des paramètres (affichés tels quels)
 P_REFERENCE, P_LENGTH = "Référence", "Longueur"
@@ -60,36 +71,36 @@ def _clamp_centre(centre: float, size: float, extent: float) -> float:
     return min(max(centre, size / 2), extent - size / 2)
 
 
+def _fr(value: float, decimals: int = 1) -> str:
+    """Nombre court à la française : 61,4 ; 200."""
+    return f"{value:.{decimals}f}".rstrip("0").rstrip(".").replace(".", ",")
+
+
 class MainController(QtCore.QObject):
 
     def __init__(self, view, data_dir, library_dir):
         super().__init__()
         self.view = view
         self.data_dir = pathlib.Path(data_dir)
-        self.library_dir = pathlib.Path(library_dir)
+        self.bundled_library = pathlib.Path(library_dir)     # livrée avec l'application
         self.settings_path = self.data_dir / "settings.json"
-        self.schema = app_settings.schema(str(self.library_dir))
+        self.schema = app_settings.schema()
         # réglages : valeurs par défaut du schéma, remplacées par celles enregistrées
         self.options = settings.load(self.settings_path,
-                                     {"dark_mode": False,
+                                     {"dark_mode": False, "last_dir": "",
                                       **options_panel.schema_defaults(self.schema)})
 
-        self.heatsinks = {}
-        for path in library.list_heatsinks(self.library_dir):
-            sheet = library.load_heatsink(path)
-            self.heatsinks[sheet.name] = sheet
-        self.models = {}
-        for path in library.list_source_models(self.library_dir):
-            model = library.load_source_model(path)
-            self.models[model.name] = model
-        if not self.heatsinks:
-            raise FileNotFoundError(f"aucun dissipateur dans {self.library_dir}")
+        self.heatsinks, self.models, self.library_errors = {}, {}, []
+        self.library_dir = self.bundled_library
+        self._load_library()
 
         # projet
         self.heatsink = next(iter(self.heatsinks.values()))
         self.length = self.heatsink.rth_length
         self.sources: list = []
         self.conditions = Conditions(FORCED, ambient=DEFAULT_AMBIENT)
+        self.project_path = None
+        self.modified = False
         self.selected = -1
         self.result = None
         self._updating = False          # changement venu du contrôleur : pas de boucle
@@ -97,10 +108,27 @@ class MainController(QtCore.QObject):
         # modèles Qt parentés à leur vue : détruits avec elle, dans l'ordre
         self.tree_model = QtGui.QStandardItemModel(view.tree)
         view.tree.setModel(self.tree_model)
+        self.results_model = QtGui.QStandardItemModel(view.results_table)
+        self.results_model.setHorizontalHeaderLabels(RESULT_HEADERS)
+        view.results_table.setModel(self.results_model)
+        # colonnes à largeur égale : tout le tableau reste visible sans défilement
+        view.results_table.horizontalHeader().setSectionResizeMode(
+            QtWidgets.QHeaderView.ResizeMode.Stretch)
+        self.library_model = QtGui.QStandardItemModel(view.library_table)
+        self.library_proxy = QtCore.QSortFilterProxyModel(view.library_table)
+        self.library_proxy.setSourceModel(self.library_model)
+        self.library_proxy.setFilterKeyColumn(-1)           # toutes les colonnes
+        self.library_proxy.setFilterCaseSensitivity(QtCore.Qt.CaseSensitivity.CaseInsensitive)
+        view.library_table.setModel(self.library_proxy)
 
         self._build_parameters()
+        self._show_library()
 
         # slots en méthodes liées (pas de lambda qui garderait le contrôleur en vie)
+        view.actionNew.triggered.connect(self.new_project)
+        view.actionOpen.triggered.connect(self.open_project)
+        view.actionSave.triggered.connect(self.save_project)
+        view.actionSaveAs.triggered.connect(self.save_project_as)
         view.actionAdd.triggered.connect(self.add_source)
         view.actionClone.triggered.connect(self.clone_source)
         view.actionRotate.triggered.connect(self.rotate_source)
@@ -108,17 +136,112 @@ class MainController(QtCore.QObject):
         view.actionOptions.triggered.connect(self.edit_options)
         view.actionDark.toggled.connect(self.set_dark_mode)
         view.closing.connect(self.save_settings)
+        view.can_close = self.confirm_discard
         view.scene.sourceMoved.connect(self._source_dragged)
         view.scene.sourceSelected.connect(self.select)
         view.tree.selectionModel().currentChanged.connect(self._tree_selected)
+        view.results_table.selectionModel().currentRowChanged.connect(self._result_selected)
+        view.library_filter.textChanged.connect(self.library_proxy.setFilterFixedString)
+        view.library_table.doubleClicked.connect(self._library_activated)
 
         view.actionDark.setChecked(bool(self.options["dark_mode"]))
         self.apply_theme()
         self._plate_changed()
-        if DEFAULT_MODEL in self.models:
+        self._default_sources()
+        self._structure_changed()
+        self._set_modified(False)
+
+    # ------------------------------------------------------------ librairie
+    def _load_library(self):
+        """
+        Lit la librairie : celle de l'option « Répertoire de la librairie » si elle
+        existe, sinon celle livrée avec l'application. Une fiche illisible est ignorée
+        et signalée, sans empêcher le démarrage.
+        """
+        chosen = str(self.options.get("library_dir") or "").strip()
+        folder = pathlib.Path(chosen) if chosen else self.bundled_library
+        errors = []
+        if chosen and not folder.is_dir():
+            errors.append(f"librairie introuvable : {folder} (librairie livrée utilisée)")
+            folder = self.bundled_library
+        heatsinks, models = {}, {}
+        for paths, load, target in ((library.list_heatsinks(folder), library.load_heatsink,
+                                     heatsinks),
+                                    (library.list_source_models(folder),
+                                     library.load_source_model, models)):
+            for path in paths:
+                try:
+                    sheet = load(path)
+                except (OSError, ValueError, KeyError, TypeError) as error:
+                    errors.append(f"fiche ignorée, {path.name} : {error}")
+                    continue
+                target[sheet.name] = sheet
+        if not heatsinks:
+            if folder == self.bundled_library:
+                raise FileNotFoundError(f"aucun dissipateur dans {folder}")
+            errors.append(f"aucun dissipateur dans {folder} (librairie livrée utilisée)")
+            self.options["library_dir"] = ""
+            self._load_library()
+            self.library_errors = errors + self.library_errors
+            return
+        self.library_dir, self.heatsinks, self.models = folder, heatsinks, models
+        self.library_errors = errors
+
+    def _show_library(self):
+        """Remplit la table de la librairie et les listes de choix des paramètres."""
+        model = self.library_model
+        model.clear()
+        model.setHorizontalHeaderLabels(LIBRARY_HEADERS)
+
+        def row(kind, name, texts, tip):
+            items = [QtGui.QStandardItem(text) for text in [kind] + texts]
+            for item in items:
+                item.setData(kind, KIND_ROLE)
+                item.setData(name, NAME_ROLE)
+                item.setToolTip(tip)
+            model.appendRow(items)
+
+        for sheet in self.heatsinks.values():
+            row(KIND_HEATSINK, sheet.name,
+                [sheet.name, sheet.manufacturer,
+                 f"{_fr(sheet.width * MM)} × {_fr(sheet.height * MM)} mm, "
+                 f"semelle {_fr(sheet.base * MM)}",
+                 f"{_fr(sheet.rth_natural, 3)} / {_fr(sheet.rth_forced, 3)} K/W "
+                 f"à {_fr(sheet.rth_length * MM)} mm"],
+                "\n".join(filter(None, [sheet.source, sheet.notes])))
+        for sheet in self.models.values():
+            row(KIND_SOURCE, sheet.name,
+                [sheet.name, sheet.manufacturer,
+                 f"{_fr(sheet.size_x * MM)} × {_fr(sheet.size_y * MM)} mm",
+                 " ; ".join(filter(None, [sheet.package, f"{_fr(sheet.power)} W"]))],
+                sheet.notes)
+        table = self.view.library_table
+        table.sortByColumn(0, QtCore.Qt.SortOrder.AscendingOrder)
+        table.resizeColumnsToContents()
+
+        self._updating = True
+        try:
+            reference = self.project_params.child("Dissipateur", P_REFERENCE)
+            reference.setLimits(list(self.heatsinks))
+            reference.setValue(self.heatsink.name)
+            chooser = self.project_params.child("Actions", P_MODEL)
+            current = chooser.value()
+            names = list(self.models)
+            chooser.setLimits(names)
+            if names:
+                chooser.setValue(current if current in names
+                                 else (DEFAULT_MODEL if DEFAULT_MODEL in names else names[0]))
+        finally:
+            self._updating = False
+
+    def _library_activated(self, index):
+        """Double-clic dans la librairie : charge le dissipateur ou ajoute la source."""
+        kind, name = index.data(KIND_ROLE), index.data(NAME_ROLE)
+        if kind == KIND_HEATSINK:
+            self.project_params.child("Dissipateur", P_REFERENCE).setValue(name)
+        elif kind == KIND_SOURCE:
+            self.project_params.child("Actions", P_MODEL).setValue(name)
             self.add_source()
-        else:
-            self._structure_changed()
 
     # ------------------------------------------------------------ paramètres
     def _build_parameters(self):
@@ -180,8 +303,7 @@ class MainController(QtCore.QObject):
         ])
         self.source_params.child("Source").sigTreeStateChanged.connect(self._source_edited)
 
-        self.heatsink_params = ptree.Parameter.create(name="", type="group",
-                                                      children=[
+        self.heatsink_params = ptree.Parameter.create(name="", type="group", children=[
             {"name": "Dissipateur", "type": "group", "children": [
                 _readout(P_REFERENCE), _readout(H_WIDTH), _readout(H_HEIGHT),
                 _readout(H_BASE), _readout(H_RTH_N), _readout(H_RTH_F),
@@ -204,6 +326,7 @@ class MainController(QtCore.QObject):
             reversed_flow=self._condition(P_REVERSED),
             black_anodised=self._condition(P_BLACK),
             horizontal=self._condition(P_HORIZONTAL))
+        self._set_modified()
         self._show_conditions()
         self.refresh()
 
@@ -217,12 +340,28 @@ class MainController(QtCore.QObject):
             group.child(name).setOpts(visible=not forced)
         self.view.scene.set_flow(forced, self.conditions.reversed_flow)
 
+    def _show_project_values(self):
+        """Reporte le projet dans les paramètres (ouverture, nouveau projet)."""
+        c = self.conditions
+        group = self.project_params.child("Conditions")
+        self._updating = True
+        try:
+            self.project_params.child("Dissipateur", P_REFERENCE).setValue(self.heatsink.name)
+            self.project_params.child("Dissipateur", P_LENGTH).setValue(self.length * MM)
+            for name, value in ((P_MODE, c.mode), (P_AMBIENT, c.ambient), (P_SPEED, c.speed),
+                                (P_ALTITUDE, c.altitude), (P_REVERSED, c.reversed_flow),
+                                (P_BLACK, c.black_anodised), (P_HORIZONTAL, c.horizontal)):
+                group.child(name).setValue(value)
+        finally:
+            self._updating = False
+
     def _heatsink_edited(self, *_):
         if self._updating:
             return
         group = self.project_params.child("Dissipateur")
         self.heatsink = self.heatsinks[group.child(P_REFERENCE).value()]
         self.length = group.child(P_LENGTH).value() / MM
+        self._set_modified()
         self._plate_changed()
         self._structure_changed()
 
@@ -246,6 +385,13 @@ class MainController(QtCore.QObject):
             number += 1
         return f"Q{number}"
 
+    def _default_sources(self):
+        """Projet de départ : une source du modèle par défaut, au centre."""
+        model = self.models.get(DEFAULT_MODEL)
+        self.sources = [] if model is None else [self._inside(
+            model.place("Q1", self.heatsink.width / 2, self.length / 2))]
+        self.selected = 0 if self.sources else -1
+
     def add_source(self, *_):
         model = self.models.get(self.project_params.child("Actions", P_MODEL).value())
         if model is None:
@@ -253,6 +399,7 @@ class MainController(QtCore.QObject):
         source = model.place(self._next_name(), self.heatsink.width / 2, self.length / 2)
         self.sources.append(self._inside(source))
         self.selected = len(self.sources) - 1
+        self._set_modified()
         self._structure_changed()
 
     def clone_source(self, *_):
@@ -264,6 +411,7 @@ class MainController(QtCore.QObject):
                                     y=original.y + CLONE_OFFSET)
         self.sources.append(self._inside(clone))
         self.selected = len(self.sources) - 1
+        self._set_modified()
         self._structure_changed()
 
     def rotate_source(self, *_):
@@ -272,6 +420,7 @@ class MainController(QtCore.QObject):
         source = self.sources[self.selected]
         self.sources[self.selected] = self._inside(dataclasses.replace(
             source, size_x=source.size_y, size_y=source.size_x))
+        self._set_modified()
         self._structure_changed()
 
     def delete_source(self, *_):
@@ -279,11 +428,13 @@ class MainController(QtCore.QObject):
             return
         del self.sources[self.selected]
         self.selected = -1
+        self._set_modified()
         self._structure_changed()
 
     def _source_dragged(self, index: int, x: float, y: float):
         """Source déplacée à la souris (centre en mm) : calcul en direct."""
         self.sources[index] = dataclasses.replace(self.sources[index], x=x / MM, y=y / MM)
+        self._set_modified()
         if index == self.selected:
             self._show_source_values()
         self.refresh()
@@ -300,6 +451,7 @@ class MainController(QtCore.QObject):
             power=value(S_POWER).value(), rth_jc=value(S_RTH_JC).value(),
             rth_cs=value(S_RTH_CS).value(), tj_max=tj_max if tj_max > 0 else None)
         self.sources[self.selected] = self._inside(source)
+        self._set_modified()
         self._structure_changed()
 
     # ------------------------------------------------------------ sélection
@@ -308,7 +460,7 @@ class MainController(QtCore.QObject):
         self.selected = index if 0 <= index < len(self.sources) else -1
         self.view.scene.select(self.selected)
         self._show_selection()
-        self._sync_tree_selection()
+        self._sync_selection()
 
     def _tree_selected(self, current, _previous):
         if self._updating:
@@ -316,14 +468,25 @@ class MainController(QtCore.QObject):
         index = current.data(INDEX_ROLE) if current.isValid() else -1
         self.select(-1 if index is None else index)
 
-    def _sync_tree_selection(self):
+    def _result_selected(self, current, _previous):
+        if not self._updating and current.isValid():
+            self.select(current.row())
+
+    def _sync_selection(self):
+        """Reporte la sélection dans l'arborescence et le tableau de résultats."""
         root = self.tree_model.item(0)
         if root is None:
             return
         item = root.child(self.selected) if self.selected >= 0 else root
+        table = self.view.results_table
         self._updating = True
         try:
             self.view.tree.setCurrentIndex(item.index())
+            if self.selected >= 0 and self.selected < self.results_model.rowCount():
+                table.setCurrentIndex(self.results_model.index(self.selected, 0))
+            else:
+                table.setCurrentIndex(QtCore.QModelIndex())
+                table.clearSelection()
         finally:
             self._updating = False
 
@@ -372,6 +535,14 @@ class MainController(QtCore.QObject):
                 root.appendRow(item)
             self.tree_model.appendRow(root)
             self.view.tree.expandAll()
+            self.results_model.setRowCount(len(self.sources))
+            for row in range(len(self.sources)):
+                for column in range(len(RESULT_HEADERS)):
+                    item = QtGui.QStandardItem("")
+                    if column:
+                        item.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignRight
+                                              | QtCore.Qt.AlignmentFlag.AlignVCenter)
+                    self.results_model.setItem(row, column, item)
         finally:
             self._updating = False
         if self.selected >= len(self.sources):
@@ -383,40 +554,59 @@ class MainController(QtCore.QObject):
         """Relance le calcul et met à jour la carte, les étiquettes et les résultats."""
         try:
             self.result = simulate(self.heatsink, self.length, self.sources, self.conditions)
-            message = " ; ".join(self.result.warnings)
+            messages = list(self.result.warnings)
         except (CalibrationError, ValueError) as error:
             self.result = None
-            message = f"Calcul impossible : {error}"
-        self.view.statusBar().showMessage(message)
+            messages = [f"Calcul impossible : {error}"]
+        self.view.statusBar().showMessage(" ; ".join(messages + self.library_errors))
         self._show_field()
         self._show_results()
+
+    def _margin_brush(self, margin):
+        if margin is not None and margin < 0:
+            return QtGui.QBrush(theme.color("danger"))
+        if margin is not None and margin < LOW_MARGIN:
+            return QtGui.QBrush(QtGui.QColor(WARNING_COLOR))
+        return QtGui.QBrush(theme.color("text"))
 
     def _show_field(self):
         scene, result = self.view.scene, self.result
         root = self.tree_model.item(0)
-        title = f"{self.heatsink.name} — {self.length * MM:.0f} mm"
+        title = f"{self.heatsink.name} — {_fr(self.length * MM)} mm"
+        if root is None:
+            return
         if result is None:
             scene.set_labels([source.name for source in self.sources])
-            if root is not None:
-                root.setText(title)
-                for index, source in enumerate(self.sources):
-                    root.child(index).setText(source.name)
+            root.setText(title)
+            for index, source in enumerate(self.sources):
+                root.child(index).setText(source.name)
+                self.results_model.item(index, 0).setText(source.name)
+                for column in range(1, len(RESULT_HEADERS)):
+                    self.results_model.item(index, column).setText("—")
             return
         # échelle de couleurs sur l'étendue de la carte : c'est le relief qui compte
         scene.set_field(result.surface, float(result.surface.min()), result.hottest)
         labels = []
         for index, item in enumerate(result.sources):
-            text = f"{item.source.name}  {item.junction:.0f} °C"
-            labels.append(text)
-            if root is not None:
-                root.child(index).setText(f"{item.source.name} — {item.source.power:.0f} W"
-                                          f" — Tj {item.junction:.0f} °C")
-                over = item.margin is not None and item.margin < 0
-                root.child(index).setForeground(QtGui.QBrush(
-                    theme.color("danger" if over else "text")))
+            source = item.source
+            labels.append(f"{source.name}  {item.junction:.0f} °C")
+            brush = self._margin_brush(item.margin)
+            row = root.child(index)
+            row.setText(f"{source.name} — {source.power:.0f} W — Tj {item.junction:.0f} °C")
+            row.setForeground(QtGui.QBrush(theme.color("danger"))
+                              if item.margin is not None and item.margin < 0
+                              else QtGui.QBrush(theme.color("text")))
+            texts = [source.name, f"{source.power:.0f}", f"{item.sink_mean:.1f}",
+                     f"{item.sink_max:.1f}", f"{item.case:.1f}", f"{item.junction:.1f}",
+                     "—" if source.tj_max is None else f"{source.tj_max:.0f}",
+                     "—" if item.margin is None else f"{item.margin:+.1f}"]
+            for column, text in enumerate(texts):
+                cell = self.results_model.item(index, column)
+                cell.setText(text)
+                cell.setForeground(brush if column in (5, 7)
+                                   else QtGui.QBrush(theme.color("text")))
         scene.set_labels(labels)
-        if root is not None:
-            root.setText(f"{title} — max {result.hottest:.0f} °C")
+        root.setText(f"{title} — max {result.hottest:.0f} °C")
 
     def _show_results(self):
         result = self.result
@@ -454,6 +644,124 @@ class MainController(QtCore.QObject):
             readouts.child(R_MARGIN).setValue(
                 "—" if item.margin is None else f"{item.margin:+.1f} K")
 
+    # ------------------------------------------------------------ fichiers de projet
+    def project(self) -> Project:
+        return Project(heatsink_name=self.heatsink.name,
+                       manufacturer=self.heatsink.manufacturer, length=self.length,
+                       conditions=self.conditions, sources=list(self.sources))
+
+    def _set_modified(self, modified: bool = True):
+        self.modified = modified
+        name = self.project_path.name if self.project_path else "Nouveau projet"
+        application = QtWidgets.QApplication.applicationName() or "CoolingTool"
+        self.view.setWindowTitle(f"{name}{' *' if modified else ''} — {application}")
+
+    def _apply_project(self, project: Project, path=None):
+        if project.heatsink_name not in self.heatsinks:
+            maker = f" ({project.manufacturer})" if project.manufacturer else ""
+            raise ValueError(f"le dissipateur « {project.heatsink_name} »{maker} "
+                             "n'est pas dans la librairie")
+        self.heatsink = self.heatsinks[project.heatsink_name]
+        self.length = project.length
+        self.conditions = project.conditions
+        self.sources = list(project.sources)
+        self.selected = -1
+        self.project_path = pathlib.Path(path) if path else None
+        self._show_project_values()
+        self._plate_changed()
+        self._structure_changed()
+        self._set_modified(False)
+
+    def new_project(self, *_):
+        if not self.confirm_discard():
+            return
+        heatsink = next(iter(self.heatsinks.values()))
+        self.heatsink, self.length = heatsink, heatsink.rth_length
+        self.conditions = Conditions(FORCED, ambient=DEFAULT_AMBIENT)
+        self.project_path = None
+        self._default_sources()
+        self._show_project_values()
+        self._plate_changed()
+        self._structure_changed()
+        self._set_modified(False)
+
+    def open_project(self, *_):
+        if not self.confirm_discard():
+            return
+        path = self._ask_open_path()
+        if path:
+            self.load_project(path)
+
+    def load_project(self, path) -> bool:
+        try:
+            self._apply_project(Project.load(path), path)
+        except (OSError, ValueError) as error:
+            self._error(f"Impossible d'ouvrir {pathlib.Path(path).name} :\n{error}")
+            return False
+        self.options["last_dir"] = str(pathlib.Path(path).parent)
+        return True
+
+    def save_project(self, *_) -> bool:
+        if self.project_path is None:
+            return self.save_project_as()
+        return self._write_project(self.project_path)
+
+    def save_project_as(self, *_) -> bool:
+        path = self._ask_save_path()
+        if not path:
+            return False
+        path = pathlib.Path(path)
+        if not path.name.endswith(EXTENSION):
+            # un nom saisi sans extension, ou en .json seul, reçoit l'extension complète
+            stem = path.name[:-len(".json")] if path.name.endswith(".json") else path.name
+            path = path.with_name(stem + EXTENSION)
+        return self._write_project(path)
+
+    def _write_project(self, path) -> bool:
+        try:
+            self.project().save(path)
+        except OSError as error:
+            self._error(f"Impossible d'enregistrer {pathlib.Path(path).name} :\n{error}")
+            return False
+        self.project_path = pathlib.Path(path)
+        self.options["last_dir"] = str(self.project_path.parent)
+        self._set_modified(False)
+        return True
+
+    def confirm_discard(self) -> bool:
+        """Vrai si le projet courant peut être quitté (enregistré, ou abandon accepté)."""
+        if not self.modified:
+            return True
+        answer = self._ask_save_changes()
+        if answer == "save":
+            return self.save_project()
+        return answer == "discard"
+
+    # dialogues : méthodes à part, remplacées dans les tests
+    def _start_dir(self) -> str:
+        last = self.options.get("last_dir") or ""
+        return last if last and pathlib.Path(last).is_dir() else str(pathlib.Path.home())
+
+    def _ask_open_path(self) -> str:
+        return QtWidgets.QFileDialog.getOpenFileName(
+            self.view, "Ouvrir un projet", self._start_dir(), PROJECT_FILTER)[0]
+
+    def _ask_save_path(self) -> str:
+        name = self.project_path.name if self.project_path else f"projet{EXTENSION}"
+        return QtWidgets.QFileDialog.getSaveFileName(
+            self.view, "Enregistrer le projet",
+            str(pathlib.Path(self._start_dir()) / name), PROJECT_FILTER)[0]
+
+    def _ask_save_changes(self) -> str:
+        buttons = QtWidgets.QMessageBox.StandardButton
+        answer = QtWidgets.QMessageBox.question(
+            self.view, "Projet modifié", "Enregistrer les modifications du projet ?",
+            buttons.Save | buttons.Discard | buttons.Cancel, buttons.Save)
+        return {buttons.Save: "save", buttons.Discard: "discard"}.get(answer, "cancel")
+
+    def _error(self, text: str):
+        QtWidgets.QMessageBox.warning(self.view, "CoolingTool", text)
+
     # ------------------------------------------------------------ thème
     def set_dark_mode(self, enabled: bool):
         self.options["dark_mode"] = bool(enabled)
@@ -471,8 +779,19 @@ class MainController(QtCore.QObject):
     def edit_options(self):
         dialog = options_panel.OptionsPannel(self.schema, self.options, self.view)
         if dialog.exec():
-            self.options.update(dialog.getOptions())
-            self.save_settings()
+            self.apply_options(dialog.getOptions())
+
+    def apply_options(self, values: dict):
+        """Prend en compte de nouvelles options (changement de librairie compris)."""
+        previous = self.options.get("library_dir")
+        self.options.update(values)
+        if self.options.get("library_dir") != previous:
+            self._load_library()
+            # le dissipateur du projet reste utilisable même s'il n'est plus en librairie
+            self.heatsinks.setdefault(self.heatsink.name, self.heatsink)
+            self._show_library()
+            self.refresh()
+        self.save_settings()
 
     def save_settings(self):
         settings.save(self.settings_path, self.options)

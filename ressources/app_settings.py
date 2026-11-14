@@ -5,17 +5,17 @@ de premier niveau, « key » est le nom de l'option dans les réglages.
 """
 
 
-def schema(default_library: str) -> dict:
+def schema() -> dict:
     return {
         "Général": {
             "type": "group",
             "children": {
-                # par défaut la librairie livrée avec l'application ; pas encore pris en
-                # compte (étape « librairie » de l'interface)
+                # vide : la librairie livrée avec l'application. Sinon un dossier (par
+                # exemple partagé) contenant dissipateurs/, sources/ et courbes/.
                 "Répertoire de la librairie": {
                     "type": "file",
                     "fileMode": "Directory",
-                    "default": default_library,
+                    "default": "",
                     "key": "library_dir",
                 },
             },
