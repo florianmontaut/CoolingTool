@@ -3,8 +3,9 @@
 Simulation thermique 2D d'un dissipateur portant des sources de chaleur : repérer les
 points chauds dus au placement des composants ou à un flux de chaleur trop fort.
 
-État : moteur de calcul et interface (scène, sources déplaçables, calcul en direct,
-librairie, tableau de résultats, fichiers de projet). Validé sur deux essais à 350 mm :
+État : moteur de calcul et interface (scène, sources déplaçables et groupables, calcul
+en direct, librairie, tableau de résultats, fichiers de projet), part de la chaleur
+cédée à l'intérieur du boîtier. Validé sur deux essais à 350 mm :
 KL-271 en convection forcée (4,5 % d'écart moyen sur l'échauffement) et KL-288 en
 convection naturelle (1,6 %).
 
@@ -41,6 +42,16 @@ for item in result.sources:
 
 Longueurs en mètres, températures en °C. `result.surface` est la carte de température de
 la face de montage, `result.warnings` signale les sorties d'abaque.
+
+Avec `Conditions(..., internal=85)`, la face de montage non couverte échange avec
+l'intérieur du boîtier à 85 °C : `result.internal_power` (W) et `result.internal_ratio`
+donnent la part de chaleur qui y part (négative si l'intérieur est plus chaud).
+
+## Groupes de sources
+
+Dans l'arborescence, Ctrl+clic sur plusieurs sources puis « Grouper » (Ctrl+G). Sur la
+scène, saisir une source groupée déplace tout le groupe ; Alt+glisser, la source seule.
+Un groupe sélectionné se pivote, se clone (un second onduleur) ou se supprime d'un bloc.
 
 ## Principe
 

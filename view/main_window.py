@@ -56,13 +56,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self.actionAdd = action("Ajouter une source", "plus",
                                 "Ajouter une source du modèle choisi (Ctrl+I)",
                                 shortcut="Ctrl+I")
-        self.actionClone = action("Cloner", "copy", "Cloner la source sélectionnée (Ctrl+D)",
+        self.actionClone = action("Cloner", "copy",
+                                  "Cloner la source ou le groupe sélectionné (Ctrl+D)",
                                   shortcut="Ctrl+D")
         self.actionRotate = action("Pivoter", "rotate",
-                                   "Pivoter la source sélectionnée de 90° (R)", shortcut="R")
+                                   "Pivoter la source ou le groupe sélectionné de 90° (R)",
+                                   shortcut="R")
         self.actionDelete = action("Supprimer", "trash",
-                                   "Supprimer la source sélectionnée (Suppr)",
+                                   "Supprimer la source ou le groupe sélectionné (Suppr)",
                                    shortcut=QtGui.QKeySequence.StandardKey.Delete)
+        self.actionGroup = action("Grouper", "group",
+                                  "Grouper les sources sélectionnées dans l'arborescence "
+                                  "(Ctrl+clic pour en choisir plusieurs) (Ctrl+G)",
+                                  shortcut="Ctrl+G")
+        self.actionUngroup = action("Dégrouper", "ungroup",
+                                    "Dissoudre le groupe sélectionné, ou en sortir la source "
+                                    "sélectionnée (Ctrl+Maj+G)", shortcut="Ctrl+Shift+G")
         toolbar.addSeparator()
         self.actionOptions = action("Options...", "settings", "Options de l'application")
         self.actionDark = action("Thème sombre", "moon", "Thème sombre", checkable=True)
@@ -72,6 +81,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tree = QtWidgets.QTreeView()
         self.tree.setHeaderHidden(True)
         self.tree.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        # Ctrl+clic : plusieurs sources à grouper
+        self.tree.setSelectionMode(
+            QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.tree.setToolTip("Ctrl+clic : choisir plusieurs sources à grouper. Sur la scène, "
+                             "cliquer une source groupée saisit tout le groupe ; Alt+clic, "
+                             "la source seule.")
 
         self.library_filter = QtWidgets.QLineEdit()
         self.library_filter.setPlaceholderText("Filtrer la librairie...")

@@ -215,3 +215,64 @@ def test_finition_anodisee_de_la_fiche(p300):
     assert finish_factor(anodised, False) == pytest.approx(1 / 0.9)
     plain = calibrate(anodised, 0.3, Conditions(NATURAL))
     assert plain.rth_target == pytest.approx(p300.rth_natural / 0.9)
+
+
+# ------------------------------------------------------------------ point fixe
+def test_reprise_d_un_resultat_precedent(p300):
+    """Source déplacée : en repartant du résultat précédent, deux résolutions suffisent."""
+    conditions = Conditions(NATURAL, ambient=40.0)
+    first = simulate(p300, 0.3, [module("Q1", 0.1, 0.15)], conditions)
+    assert first.iterations <= 8
+    moved = [module("Q1", 0.11, 0.16)]
+    warm = simulate(p300, 0.3, moved, conditions, start=first)
+    cold = simulate(p300, 0.3, moved, conditions)
+    assert warm.iterations <= 3
+    assert warm.hottest == pytest.approx(cold.hottest, abs=1e-3)
+    # un résultat d'un autre calage (autres conditions) n'est pas repris
+    other = simulate(p300, 0.3, moved, Conditions(NATURAL, ambient=40.0, horizontal=True),
+                     start=first)
+    assert other.hottest > cold.hottest
+
+
+# ------------------------------------------------------------------ face intérieure
+def test_coefficients_de_la_face_interieure():
+    # plaque verticale de 350 mm, 30 K d'écart : quelques W/m2.K
+    assert 3.5 < air.vertical_plate_h(115.0, 85.0, 0.35) < 6.0
+    # rayonnement : la finition change tout
+    # 4 εσT³ à la température moyenne (100 °C) : 10 W/m2.K anodisé, 1,8 brut
+    assert air.radiation_h(115.0, 85.0, 0.85) == pytest.approx(10.0, rel=0.02)
+    assert air.radiation_h(115.0, 85.0, 0.15) == pytest.approx(1.77, rel=0.02)
+    # en altitude, l'air moins dense convecte moins
+    assert air.vertical_plate_h(115.0, 85.0, 0.35, altitude=3000.0) \
+        < air.vertical_plate_h(115.0, 85.0, 0.35)
+
+
+@pytest.mark.parametrize("mode", [FORCED, NATURAL])
+def test_echange_avec_l_interieur(p300, mode):
+    sources = [module("Q1", 0.1, 0.15)]
+    plain = simulate(p300, 0.3, sources, Conditions(mode, ambient=40.0))
+    assert plain.internal_h is None and plain.internal_power == 0.0
+    cool = simulate(p300, 0.3, sources, Conditions(mode, ambient=40.0, internal=40.0))
+    # bilan : ce qui ne part pas par les ailettes part dans le boîtier
+    assert cool.convected + cool.internal_power == pytest.approx(300.0, rel=1e-6)
+    assert 0 < cool.internal_ratio < 0.3
+    assert cool.hottest < plain.hottest
+    # intérieur plus chaud que la semelle : le flux s'inverse, c'est signalé
+    hot = simulate(p300, 0.3, sources, Conditions(mode, ambient=40.0, internal=150.0))
+    assert hot.internal_power < 0 and hot.hottest > plain.hottest
+    assert any("intérieur plus chaud" in text for text in hot.warnings)
+
+
+def test_face_interieure_anodisee_et_h_impose(p300):
+    sources = [module("Q1", 0.1, 0.15)]
+    base = Conditions(FORCED, ambient=40.0, internal=40.0)
+    bare = simulate(p300, 0.3, sources, base)
+    black = simulate(p300, 0.3, sources, dataclasses.replace(base, black_anodised=True))
+    assert black.internal_power > 1.5 * bare.internal_power
+    imposed = simulate(p300, 0.3, sources, dataclasses.replace(base, internal_h=25.0))
+    assert imposed.internal_h == 25.0
+    # seule la face non couverte par la source échange
+    grid = imposed.grid
+    exposed = 1.0 - grid.coverage(*sources[0].bounds)
+    expected = 25.0 * grid.cell_area * float((exposed * (imposed.surface - 40.0)).sum())
+    assert imposed.internal_power == pytest.approx(expected, rel=1e-4)

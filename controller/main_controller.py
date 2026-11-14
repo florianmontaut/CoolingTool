@@ -4,6 +4,10 @@ Contrôleur principal : tient le projet (dissipateur, longueur, sources, conditi
 relance le calcul à chaque changement et met à jour la scène, l'arborescence, les
 paramètres et le tableau de résultats. Gère aussi la librairie et les fichiers de projet.
 Le modèle est en SI ; l'interface en mm et °C.
+
+Groupes : une source porte le nom de son groupe (Source.group). Un groupe se déplace,
+pivote, se clone et se supprime d'un bloc ; il est sélectionné en cliquant l'une de ses
+sources, la source seule avec Alt.
 """
 import dataclasses
 import pathlib
@@ -20,6 +24,7 @@ from ressources import app_settings
 
 MM = 1000.0
 DEFAULT_AMBIENT = 55.0              # °C, air au niveau des ailettes
+DEFAULT_INTERNAL = 85.0             # °C, intérieur du boîtier
 DEFAULT_MODEL = "Module 62 mm"
 CLONE_OFFSET = 0.010                # m
 LOW_MARGIN = 10.0                   # K : marge sur Tj max signalée en orange en dessous
@@ -27,6 +32,8 @@ WARNING_COLOR = "#E08A00"
 INDEX_ROLE = QtCore.Qt.ItemDataRole.UserRole + 1
 KIND_ROLE = QtCore.Qt.ItemDataRole.UserRole + 2     # librairie : type de fiche
 NAME_ROLE = QtCore.Qt.ItemDataRole.UserRole + 3     # librairie : nom de la fiche
+GROUP_ROLE = QtCore.Qt.ItemDataRole.UserRole + 4    # arborescence : nom du groupe
+GROUP_NAME = "Groupe"
 KIND_HEATSINK, KIND_SOURCE = "Dissipateur", "Source"
 LIBRARY_HEADERS = ["Type", "Nom", "Fabricant", "Dimensions", "Données"]
 RESULT_HEADERS = ["Source", "Pertes (W)", "Semelle moy. (°C)", "Semelle max (°C)",
@@ -39,13 +46,20 @@ P_MODE, P_AMBIENT, P_SPEED, P_ALTITUDE = ("Convection", "Température d'air",
                                           "Vitesse d'air", "Altitude")
 P_REVERSED, P_BLACK, P_HORIZONTAL = ("Sens de l'air inversé", "Anodisé noir",
                                      "Ailettes horizontales")
-P_MODEL, P_ADD, P_CLONE, P_ROTATE, P_DELETE = ("Modèle", "Ajouter une source",
-                                               "Cloner la source", "Pivoter de 90°",
-                                               "Supprimer la source")
+P_INSIDE, P_INSIDE_T, P_INSIDE_H = ("Échange avec l'intérieur", "Température interne",
+                                    "h intérieur imposé")
+P_MODEL, P_ADD, P_CLONE, P_ROTATE, P_DELETE = ("Modèle", "Ajouter une source", "Cloner",
+                                               "Pivoter de 90°", "Supprimer")
+P_GROUP, P_UNGROUP = "Grouper la sélection", "Dégrouper"
 S_NAME, S_X, S_Y, S_SIZE_X, S_SIZE_Y = ("Nom", "X (centre)", "Y (centre)", "Largeur (x)",
                                         "Longueur (y)")
 S_POWER, S_RTH_JC, S_RTH_CS, S_TJ_MAX = ("Pertes", "Rth jonction-boîtier",
                                          "Rth boîtier-semelle", "Tj max")
+S_GROUP = "Groupe"
+G_NAME, G_X, G_Y, G_COUNT, G_POWER = ("Nom", "X (centre)", "Y (centre)", "Sources",
+                                      "Pertes totales")
+G_SINK_MAX, G_HOTTEST, G_MARGIN = ("Semelle (maximum)", "Jonction la plus chaude",
+                                   "Marge la plus faible")
 R_SINK_MEAN, R_SINK_MAX, R_CASE, R_JUNCTION, R_MARGIN = (
     "Semelle (moyenne)", "Semelle (maximum)", "Boîtier", "Jonction", "Marge sur Tj max")
 H_WIDTH, H_HEIGHT, H_BASE, H_RTH_N, H_RTH_F = ("Largeur", "Hauteur", "Semelle",
@@ -54,6 +68,8 @@ H_ORIGIN, H_WINDOW, H_METAL = "Données", "Section d'air", "Conduction des ailet
 H_TARGET, H_COEFFICIENT, H_POWER, H_HOTTEST, H_AIR_OUT = (
     "Rth visée", "Coefficient d'échange", "Puissance totale", "Point le plus chaud",
     "Air en sortie")
+H_FINS, H_INSIDE, H_INSIDE_COEFFICIENT = ("Par les ailettes", "Vers l'intérieur",
+                                          "h intérieur")
 
 
 def _number(name, value=0.0, suffix="", **options):
@@ -102,7 +118,9 @@ class MainController(QtCore.QObject):
         self.conditions = Conditions(FORCED, ambient=DEFAULT_AMBIENT)
         self.project_path = None
         self.modified = False
-        self.selected = -1
+        self.selected = -1              # source sélectionnée, -1 : aucune
+        self.selected_group = ""        # groupe sélectionné (selected vaut alors -1)
+        self._source_items, self._group_items = {}, {}      # arborescence
         self.result = None
         self._updating = False          # changement venu du contrôleur : pas de boucle
 
@@ -134,12 +152,14 @@ class MainController(QtCore.QObject):
         view.actionClone.triggered.connect(self.clone_source)
         view.actionRotate.triggered.connect(self.rotate_source)
         view.actionDelete.triggered.connect(self.delete_source)
+        view.actionGroup.triggered.connect(self.group_sources)
+        view.actionUngroup.triggered.connect(self.ungroup)
         view.actionOptions.triggered.connect(self.edit_options)
         view.actionDark.toggled.connect(self.set_dark_mode)
         view.closing.connect(self.save_settings)
         view.can_close = self.confirm_discard
         view.scene.sourceMoved.connect(self._source_dragged)
-        view.scene.sourceSelected.connect(self.select)
+        view.scene.sourceSelected.connect(self._scene_selected)
         view.tree.selectionModel().currentChanged.connect(self._tree_selected)
         view.results_table.selectionModel().currentRowChanged.connect(self._result_selected)
         view.library_filter.textChanged.connect(self.library_proxy.setFilterFixedString)
@@ -262,8 +282,18 @@ class MainController(QtCore.QObject):
                             "section d'air de la fiche du dissipateur"),
                 _number(P_ALTITUDE, 0.0, "m", limits=(0.0, 6000.0), step=100.0),
                 {"name": P_REVERSED, "type": "bool", "value": False},
-                {"name": P_BLACK, "type": "bool", "value": False},
+                {"name": P_BLACK, "type": "bool", "value": False,
+                 "tip": "Finition du dissipateur : Rth en convection naturelle et "
+                        "rayonnement de la face intérieure"},
                 {"name": P_HORIZONTAL, "type": "bool", "value": False},
+                {"name": P_INSIDE, "type": "bool", "value": False,
+                 "tip": "Le dissipateur forme une paroi du boîtier, ailettes dehors : la "
+                        "face de montage non couverte par les sources échange avec "
+                        "l'intérieur"},
+                _number(P_INSIDE_T, DEFAULT_INTERNAL, "°C", step=5.0),
+                _number(P_INSIDE_H, 0.0, "W/m².K", limits=(0.0, 1e3), step=1.0,
+                        tip="0 : calculé (convection naturelle d'une plaque verticale "
+                            "et rayonnement vers les parois)"),
             ]},
             {"name": "Actions", "type": "group", "children": [
                 {"name": P_MODEL, "type": "list", "limits": models,
@@ -273,6 +303,8 @@ class MainController(QtCore.QObject):
                 {"name": P_CLONE, "type": "action"},
                 {"name": P_ROTATE, "type": "action"},
                 {"name": P_DELETE, "type": "action"},
+                {"name": P_GROUP, "type": "action"},
+                {"name": P_UNGROUP, "type": "action"},
             ]},
         ])
         self.view.project_tree.setParameters(self.project_params, showTop=False)
@@ -285,6 +317,8 @@ class MainController(QtCore.QObject):
         actions.child(P_CLONE).sigActivated.connect(self.clone_source)
         actions.child(P_ROTATE).sigActivated.connect(self.rotate_source)
         actions.child(P_DELETE).sigActivated.connect(self.delete_source)
+        actions.child(P_GROUP).sigActivated.connect(self.group_sources)
+        actions.child(P_UNGROUP).sigActivated.connect(self.ungroup)
 
         self.source_params = ptree.Parameter.create(name="", type="group", children=[
             {"name": "Source", "type": "group", "children": [
@@ -298,6 +332,7 @@ class MainController(QtCore.QObject):
                 _number(S_RTH_CS, suffix="K/W", limits=(0.0, 1e3), step=0.01),
                 _number(S_TJ_MAX, suffix="°C", limits=(0.0, 1e3), step=5.0,
                         tip="0 : non renseignée"),
+                _readout(S_GROUP),
             ]},
             {"name": "Résultats", "type": "group", "children": [
                 _readout(R_SINK_MEAN), _readout(R_SINK_MAX), _readout(R_CASE),
@@ -305,6 +340,19 @@ class MainController(QtCore.QObject):
             ]},
         ])
         self.source_params.child("Source").sigTreeStateChanged.connect(self._source_edited)
+
+        self.group_params = ptree.Parameter.create(name="", type="group", children=[
+            {"name": "Groupe", "type": "group", "children": [
+                {"name": G_NAME, "type": "str", "value": ""},
+                _number(G_X, suffix="mm", step=1.0),
+                _number(G_Y, suffix="mm", step=1.0),
+                _readout(G_COUNT), _readout(G_POWER),
+            ]},
+            {"name": "Résultats", "type": "group", "children": [
+                _readout(G_SINK_MAX), _readout(G_HOTTEST), _readout(G_MARGIN),
+            ]},
+        ])
+        self.group_params.child("Groupe").sigTreeStateChanged.connect(self._group_edited)
 
         self.heatsink_params = ptree.Parameter.create(name="", type="group", children=[
             {"name": "Dissipateur", "type": "group", "children": [
@@ -314,7 +362,8 @@ class MainController(QtCore.QObject):
             ]},
             {"name": "Résultats", "type": "group", "children": [
                 _readout(H_TARGET), _readout(H_COEFFICIENT), _readout(H_POWER),
-                _readout(H_HOTTEST), _readout(H_AIR_OUT),
+                _readout(H_HOTTEST), _readout(H_AIR_OUT), _readout(H_FINS),
+                _readout(H_INSIDE), _readout(H_INSIDE_COEFFICIENT),
             ]},
         ])
 
@@ -329,7 +378,9 @@ class MainController(QtCore.QObject):
             speed=self._condition(P_SPEED), altitude=self._condition(P_ALTITUDE),
             reversed_flow=self._condition(P_REVERSED),
             black_anodised=self._condition(P_BLACK),
-            horizontal=self._condition(P_HORIZONTAL))
+            horizontal=self._condition(P_HORIZONTAL),
+            internal=self._condition(P_INSIDE_T) if self._condition(P_INSIDE) else None,
+            internal_h=self._condition(P_INSIDE_H))
         self._set_modified()
         self._show_conditions()
         self.refresh()
@@ -338,10 +389,14 @@ class MainController(QtCore.QObject):
         """N'affiche que les réglages qui comptent dans le mode de convection choisi."""
         forced = self.conditions.mode == FORCED
         group = self.project_params.child("Conditions")
+        inside = self.conditions.internal is not None
         for name in (P_SPEED, P_REVERSED):
             group.child(name).setOpts(visible=forced)
-        for name in (P_BLACK, P_HORIZONTAL):
-            group.child(name).setOpts(visible=not forced)
+        group.child(P_HORIZONTAL).setOpts(visible=not forced)
+        # la finition compte aussi en forcée, pour le rayonnement de la face intérieure
+        group.child(P_BLACK).setOpts(visible=not forced or inside)
+        for name in (P_INSIDE_T, P_INSIDE_H):
+            group.child(name).setOpts(visible=inside)
         # convection naturelle, ailettes verticales : l'air monte (y croissant)
         self.view.scene.set_flow(forced or not self.conditions.horizontal,
                                  forced and self.conditions.reversed_flow)
@@ -356,7 +411,11 @@ class MainController(QtCore.QObject):
             self.project_params.child("Dissipateur", P_LENGTH).setValue(self.length * MM)
             for name, value in ((P_MODE, c.mode), (P_AMBIENT, c.ambient), (P_SPEED, c.speed),
                                 (P_ALTITUDE, c.altitude), (P_REVERSED, c.reversed_flow),
-                                (P_BLACK, c.black_anodised), (P_HORIZONTAL, c.horizontal)):
+                                (P_BLACK, c.black_anodised), (P_HORIZONTAL, c.horizontal),
+                                (P_INSIDE, c.internal is not None),
+                                (P_INSIDE_T, DEFAULT_INTERNAL if c.internal is None
+                                 else c.internal),
+                                (P_INSIDE_H, c.internal_h)):
                 group.child(name).setValue(value)
         finally:
             self._updating = False
@@ -377,7 +436,7 @@ class MainController(QtCore.QObject):
 
     def _plate_changed(self):
         """Nouvelle semelle : les sources y sont ramenées, la vue est recadrée."""
-        self.sources = [self._inside(source) for source in self.sources]
+        self._keep_inside()
         self.view.scene.set_plate(self.heatsink.width * MM, self.length * MM)
         self._show_conditions()
 
@@ -403,49 +462,85 @@ class MainController(QtCore.QObject):
         self.selected = 0 if self.sources else -1
 
     def add_source(self, *_):
+        """Source du modèle choisi, au centre ; dans le groupe sélectionné s'il y en a un."""
         model = self.models.get(self.project_params.child("Actions", P_MODEL).value())
         if model is None:
             return
         source = model.place(self._next_name(), self.heatsink.width / 2, self.length / 2)
+        source = dataclasses.replace(source, group=self.selected_group)
         self.sources.append(self._inside(source))
-        self.selected = len(self.sources) - 1
+        self.selected, self.selected_group = len(self.sources) - 1, ""
         self._set_modified()
         self._structure_changed()
 
     def clone_source(self, *_):
-        if self.selected < 0:
+        """Clone la source, ou le groupe entier (dans un nouveau groupe), décalé."""
+        if self.selected_group:
+            name, start = self._next_group_name(), len(self.sources)
+            for index in self._members(self.selected_group):
+                self.sources.append(dataclasses.replace(
+                    self.sources[index], name=self._next_name(), group=name))
+            self._shift(range(start, len(self.sources)), CLONE_OFFSET, CLONE_OFFSET)
+            self.selected_group = name
+        elif self.selected >= 0:
+            original = self.sources[self.selected]
+            clone = dataclasses.replace(original, name=self._next_name(),
+                                        x=original.x + CLONE_OFFSET,
+                                        y=original.y + CLONE_OFFSET)
+            self.sources.append(self._inside(clone))
+            self.selected = len(self.sources) - 1
+        else:
             return
-        original = self.sources[self.selected]
-        clone = dataclasses.replace(original, name=self._next_name(),
-                                    x=original.x + CLONE_OFFSET,
-                                    y=original.y + CLONE_OFFSET)
-        self.sources.append(self._inside(clone))
-        self.selected = len(self.sources) - 1
         self._set_modified()
         self._structure_changed()
 
     def rotate_source(self, *_):
-        if self.selected < 0:
+        """Pivote la source sur place, ou le groupe autour de son centre, de 90°."""
+        if self.selected_group:
+            members = self._members(self.selected_group)
+            cx, cy = self._centre(members)
+            for index in members:
+                s = self.sources[index]
+                self.sources[index] = dataclasses.replace(
+                    s, x=cx - (s.y - cy), y=cy + (s.x - cx), size_x=s.size_y, size_y=s.size_x)
+            self._shift(members, 0.0, 0.0)
+        elif self.selected >= 0:
+            source = self.sources[self.selected]
+            self.sources[self.selected] = self._inside(dataclasses.replace(
+                source, size_x=source.size_y, size_y=source.size_x))
+        else:
             return
-        source = self.sources[self.selected]
-        self.sources[self.selected] = self._inside(dataclasses.replace(
-            source, size_x=source.size_y, size_y=source.size_x))
         self._set_modified()
         self._structure_changed()
 
     def delete_source(self, *_):
-        if self.selected < 0:
+        """Supprime la source, ou le groupe et toutes ses sources."""
+        if self.selected_group:
+            self.sources = [s for s in self.sources if s.group != self.selected_group]
+            self.selected_group = ""
+        elif self.selected >= 0:
+            del self.sources[self.selected]
+        else:
             return
-        del self.sources[self.selected]
         self.selected = -1
         self._set_modified()
         self._structure_changed()
 
-    def _source_dragged(self, index: int, x: float, y: float):
-        """Source déplacée à la souris (centre en mm) : calcul en direct."""
-        self.sources[index] = dataclasses.replace(self.sources[index], x=x / MM, y=y / MM)
+    def _source_dragged(self, index: int, x: float, y: float, alone: bool = False):
+        """
+        Source déplacée à la souris (centre en mm) : son groupe la suit, d'un bloc,
+        sauf si Alt était enfoncée à la saisie. Calcul en direct.
+        """
+        source = self.sources[index]
+        if source.group and not alone:
+            self._shift(self._members(source.group), x / MM - source.x, y / MM - source.y)
+            self.view.scene.set_sources(self._rects())       # le reste du groupe suit
+        else:
+            self.sources[index] = dataclasses.replace(source, x=x / MM, y=y / MM)
         self._set_modified()
-        if index == self.selected:
+        if self.selected_group:
+            self._show_group_values()
+        elif index == self.selected:
             self._show_source_values()
         self.refresh()
 
@@ -454,7 +549,8 @@ class MainController(QtCore.QObject):
             return
         value = self.source_params.child("Source").child
         tj_max = value(S_TJ_MAX).value()
-        source = Source(
+        source = dataclasses.replace(
+            self.sources[self.selected],
             name=value(S_NAME).value().strip() or self.sources[self.selected].name,
             x=value(S_X).value() / MM, y=value(S_Y).value() / MM,
             size_x=value(S_SIZE_X).value() / MM, size_y=value(S_SIZE_Y).value() / MM,
@@ -464,36 +560,210 @@ class MainController(QtCore.QObject):
         self._set_modified()
         self._structure_changed()
 
+    # ------------------------------------------------------------ groupes
+    def _groups(self) -> list:
+        """Noms des groupes, dans l'ordre de leur première source."""
+        return list(dict.fromkeys(s.group for s in self.sources if s.group))
+
+    def _members(self, name: str) -> list:
+        """Indices des sources du groupe."""
+        return [i for i, s in enumerate(self.sources) if name and s.group == name]
+
+    def _next_group_name(self) -> str:
+        names = set(self._groups())
+        number = 1
+        while f"{GROUP_NAME} {number}" in names:
+            number += 1
+        return f"{GROUP_NAME} {number}"
+
+    def _box(self, indices) -> tuple:
+        """Rectangle englobant (x0, x1, y0, y1) des sources, en m."""
+        chosen = [self.sources[i] for i in indices]
+        return (min(s.x - s.size_x / 2 for s in chosen), max(s.x + s.size_x / 2 for s in chosen),
+                min(s.y - s.size_y / 2 for s in chosen), max(s.y + s.size_y / 2 for s in chosen))
+
+    def _centre(self, indices) -> tuple:
+        x0, x1, y0, y1 = self._box(indices)
+        return (x0 + x1) / 2, (y0 + y1) / 2
+
+    def _shift(self, indices, dx: float, dy: float):
+        """Déplace des sources d'un bloc ; le bloc reste dans la semelle."""
+        indices = list(indices)
+        if not indices:
+            return
+
+        def limit(low, high, delta, extent):
+            if high - low >= extent:
+                return extent / 2 - (low + high) / 2
+            return min(max(delta, -low), extent - high)
+
+        x0, x1, y0, y1 = self._box(indices)
+        dx = limit(x0, x1, dx, self.heatsink.width)
+        dy = limit(y0, y1, dy, self.length)
+        for i in indices:
+            s = self.sources[i]
+            self.sources[i] = self._inside(dataclasses.replace(s, x=s.x + dx, y=s.y + dy))
+
+    def _keep_inside(self):
+        """Toutes les sources dans la semelle, chaque groupe ramené d'un bloc."""
+        for name in self._groups():
+            self._shift(self._members(name), 0.0, 0.0)
+        self.sources = [self._inside(source) for source in self.sources]
+
+    def _selection_indices(self) -> list:
+        """Sources choisies dans l'arborescence (un groupe compte pour ses sources)."""
+        indices = []
+        for index in self.view.tree.selectionModel().selectedIndexes():
+            group = index.data(GROUP_ROLE)
+            row = index.data(INDEX_ROLE)
+            if group:
+                indices += self._members(group)
+            elif row is not None and row >= 0:
+                indices.append(row)
+        if not indices:
+            indices = (self._members(self.selected_group) if self.selected_group
+                       else [self.selected] if self.selected >= 0 else [])
+        return sorted(set(indices))
+
+    def group_sources(self, *_):
+        """
+        Groupe les sources sélectionnées dans l'arborescence (Ctrl+clic). Si l'une
+        d'elles est déjà dans un groupe, les autres le rejoignent.
+        """
+        indices = self._selection_indices()
+        if not indices:
+            return
+        existing = [self.sources[i].group for i in indices if self.sources[i].group]
+        name = existing[0] if existing else self._next_group_name()
+        for i in indices:
+            self.sources[i] = dataclasses.replace(self.sources[i], group=name)
+        self.selected, self.selected_group = -1, name
+        self._set_modified()
+        self._structure_changed()
+
+    def ungroup(self, *_):
+        """Dissout le groupe sélectionné, ou en retire la source sélectionnée."""
+        if self.selected_group:
+            indices = self._members(self.selected_group)
+            self.selected_group = ""
+        elif self.selected >= 0 and self.sources[self.selected].group:
+            indices = [self.selected]
+        else:
+            return
+        for i in indices:
+            self.sources[i] = dataclasses.replace(self.sources[i], group="")
+        self._set_modified()
+        self._structure_changed()
+
+    def _group_edited(self, *_):
+        """Nom ou position du groupe saisis à droite."""
+        if self._updating or not self.selected_group:
+            return
+        values = self.group_params.child("Groupe")
+        members = self._members(self.selected_group)
+        name = values.child(G_NAME).value().strip()
+        if name and name != self.selected_group and name not in self._groups():
+            for i in members:
+                self.sources[i] = dataclasses.replace(self.sources[i], group=name)
+            self.selected_group = name
+        cx, cy = self._centre(members)
+        self._shift(members, values.child(G_X).value() / MM - cx,
+                    values.child(G_Y).value() / MM - cy)
+        self._set_modified()
+        self._structure_changed()
+
+    def _show_group_values(self):
+        members = self._members(self.selected_group)
+        cx, cy = self._centre(members)
+        values = {G_NAME: self.selected_group, G_X: cx * MM, G_Y: cy * MM,
+                  G_COUNT: str(len(members)),
+                  G_POWER: f"{sum(self.sources[i].power for i in members):.0f} W"}
+        group = self.group_params.child("Groupe")
+        self._updating = True
+        try:
+            for name, value in values.items():
+                group.child(name).setValue(value)
+        finally:
+            self._updating = False
+
     # ------------------------------------------------------------ sélection
     def select(self, index: int):
         """Sélectionne une source (-1 : le dissipateur)."""
         self.selected = index if 0 <= index < len(self.sources) else -1
-        self.view.scene.select(self.selected)
+        self.selected_group = ""
+        self._apply_selection()
+
+    def select_group(self, name: str):
+        """Sélectionne un groupe entier."""
+        if not self._members(name):
+            self.select(-1)
+            return
+        self.selected, self.selected_group = -1, name
+        self._apply_selection()
+
+    def _apply_selection(self):
+        scene = self.view.scene
+        if self.selected_group:
+            scene.select(-1, self._members(self.selected_group))
+        elif self.selected >= 0:
+            scene.select(self.selected,
+                         related=self._members(self.sources[self.selected].group))
+        else:
+            scene.select(-1)
         self._show_selection()
         self._sync_selection()
 
+    def _scene_selected(self, index: int):
+        """Source saisie à la souris : son groupe s'il en a un, elle seule avec Alt."""
+        group = self.sources[index].group if 0 <= index < len(self.sources) else ""
+        if group and not self.view.scene.alone:
+            if group != self.selected_group:
+                self.select_group(group)
+        elif index != self.selected or self.selected_group:
+            self.select(index)
+
     def _tree_selected(self, current, _previous):
         if self._updating:
+            return
+        group = current.data(GROUP_ROLE) if current.isValid() else None
+        if group:
+            self.select_group(group)
             return
         index = current.data(INDEX_ROLE) if current.isValid() else -1
         self.select(-1 if index is None else index)
 
     def _result_selected(self, current, _previous):
-        if not self._updating and current.isValid():
-            self.select(current.row())
+        if self._updating or not current.isValid():
+            return
+        row, groups = current.row(), self._groups()
+        if row < len(self.sources):
+            self.select(row)
+        elif row - len(self.sources) < len(groups):
+            self.select_group(groups[row - len(self.sources)])
 
     def _sync_selection(self):
         """Reporte la sélection dans l'arborescence et le tableau de résultats."""
         root = self.tree_model.item(0)
         if root is None:
             return
-        item = root.child(self.selected) if self.selected >= 0 else root
-        table = self.view.results_table
+        if self.selected_group:
+            item = self._group_items.get(self.selected_group, root)
+            groups = self._groups()
+            row = (len(self.sources) + groups.index(self.selected_group)
+                   if self.selected_group in groups else -1)
+        elif self.selected >= 0:
+            item, row = self._source_items.get(self.selected, root), self.selected
+        else:
+            item, row = root, -1
+        table, tree = self.view.results_table, self.view.tree
         self._updating = True
         try:
-            self.view.tree.setCurrentIndex(item.index())
-            if self.selected >= 0 and self.selected < self.results_model.rowCount():
-                table.setCurrentIndex(self.results_model.index(self.selected, 0))
+            # élément déjà courant (clic dans l'arborescence) : la sélection multiple
+            # en cours est gardée
+            if tree.currentIndex() != item.index():
+                tree.setCurrentIndex(item.index())
+            if 0 <= row < self.results_model.rowCount():
+                table.setCurrentIndex(self.results_model.index(row, 0))
             else:
                 table.setCurrentIndex(QtCore.QModelIndex())
                 table.clearSelection()
@@ -503,14 +773,23 @@ class MainController(QtCore.QObject):
     def _show_selection(self):
         """Paramètres de l'élément sélectionné, en haut à droite."""
         has_source = self.selected >= 0
-        params = self.source_params if has_source else self.heatsink_params
+        has_group = bool(self.selected_group)
+        params = (self.group_params if has_group else
+                  self.source_params if has_source else self.heatsink_params)
         self.view.selection_tree.setParameters(params, showTop=False)
-        for action in (self.view.actionClone, self.view.actionRotate,
-                       self.view.actionDelete):
-            action.setEnabled(has_source)
-        for name in (P_CLONE, P_ROTATE, P_DELETE):
-            self.project_params.child("Actions", name).setOpts(enabled=has_source)
-        if has_source:
+        grouped = has_group or (has_source and bool(self.sources[self.selected].group))
+        actions = self.project_params.child("Actions")
+        for action, name, enabled in (
+                (self.view.actionClone, P_CLONE, has_source or has_group),
+                (self.view.actionRotate, P_ROTATE, has_source or has_group),
+                (self.view.actionDelete, P_DELETE, has_source or has_group),
+                (self.view.actionGroup, P_GROUP, bool(self.sources)),
+                (self.view.actionUngroup, P_UNGROUP, grouped)):
+            action.setEnabled(enabled)
+            actions.child(name).setOpts(enabled=enabled)
+        if has_group:
+            self._show_group_values()
+        elif has_source:
             self._show_source_values()
         self._show_results()
 
@@ -520,7 +799,7 @@ class MainController(QtCore.QObject):
         values = {S_NAME: source.name, S_X: source.x * MM, S_Y: source.y * MM,
                   S_SIZE_X: source.size_x * MM, S_SIZE_Y: source.size_y * MM,
                   S_POWER: source.power, S_RTH_JC: source.rth_jc, S_RTH_CS: source.rth_cs,
-                  S_TJ_MAX: source.tj_max or 0.0}
+                  S_TJ_MAX: source.tj_max or 0.0, S_GROUP: source.group or "—"}
         self._updating = True
         try:
             for name, value in values.items():
@@ -529,41 +808,69 @@ class MainController(QtCore.QObject):
             self._updating = False
 
     # ------------------------------------------------------------ calcul et affichage
+    def _rects(self) -> list:
+        """Rectangles des sources pour la scène (x0, y0, largeur, longueur), en mm."""
+        return [((s.x - s.size_x / 2) * MM, (s.y - s.size_y / 2) * MM,
+                 s.size_x * MM, s.size_y * MM) for s in self.sources]
+
     def _structure_changed(self):
-        """Sources ajoutées, retirées, renommées ou redimensionnées."""
-        scene = self.view.scene
-        scene.set_sources([((s.x - s.size_x / 2) * MM, (s.y - s.size_y / 2) * MM,
-                            s.size_x * MM, s.size_y * MM) for s in self.sources])
+        """Sources ajoutées, retirées, renommées, redimensionnées ou regroupées."""
+        self.view.scene.set_sources(self._rects())
+        groups = self._groups()
         self._updating = True
         try:
             self.tree_model.clear()
             root = QtGui.QStandardItem(theme.icon("table"), "")
             root.setData(-1, INDEX_ROLE)
-            for index, _source in enumerate(self.sources):
+            self._source_items, self._group_items = {}, {}
+            for index, source in enumerate(self.sources):
+                parent = root
+                if source.group:
+                    parent = self._group_items.get(source.group)
+                    if parent is None:
+                        parent = QtGui.QStandardItem(theme.icon("group"), source.group)
+                        parent.setData(-1, INDEX_ROLE)
+                        parent.setData(source.group, GROUP_ROLE)
+                        root.appendRow(parent)
+                        self._group_items[source.group] = parent
                 item = QtGui.QStandardItem("")
                 item.setData(index, INDEX_ROLE)
-                root.appendRow(item)
+                parent.appendRow(item)
+                self._source_items[index] = item
             self.tree_model.appendRow(root)
             self.view.tree.expandAll()
-            self.results_model.setRowCount(len(self.sources))
-            for row in range(len(self.sources)):
+            # une ligne par source, puis une ligne de synthèse par groupe
+            rows = len(self.sources) + len(groups)
+            self.results_model.setRowCount(rows)
+            bold = QtGui.QFont()
+            bold.setBold(True)
+            for row in range(rows):
                 for column in range(len(RESULT_HEADERS)):
                     item = QtGui.QStandardItem("")
                     if column:
                         item.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignRight
                                               | QtCore.Qt.AlignmentFlag.AlignVCenter)
+                    if row >= len(self.sources):
+                        item.setFont(bold)
                     self.results_model.setItem(row, column, item)
         finally:
             self._updating = False
         if self.selected >= len(self.sources):
             self.selected = -1
-        self.select(self.selected)
+        if self.selected_group not in groups:
+            self.selected_group = ""
+        if self.selected_group:
+            self.select_group(self.selected_group)
+        else:
+            self.select(self.selected)
         self.refresh()
 
     def refresh(self):
         """Relance le calcul et met à jour la carte, les étiquettes et les résultats."""
         try:
-            self.result = simulate(self.heatsink, self.length, self.sources, self.conditions)
+            # le point fixe repart du résultat précédent : calcul en direct plus rapide
+            self.result = simulate(self.heatsink, self.length, self.sources, self.conditions,
+                                   start=self.result)
             messages = list(self.result.warnings)
         except (CalibrationError, ValueError) as error:
             self.result = None
@@ -585,14 +892,19 @@ class MainController(QtCore.QObject):
         title = f"{self.heatsink.name} — {_fr(self.length * MM)} mm"
         if root is None:
             return
+        groups = self._groups()
         if result is None:
             scene.set_labels([source.name for source in self.sources])
             root.setText(title)
+            names = [s.name for s in self.sources] + [f"Σ {name}" for name in groups]
             for index, source in enumerate(self.sources):
-                root.child(index).setText(source.name)
-                self.results_model.item(index, 0).setText(source.name)
+                self._source_items[index].setText(source.name)
+            for name in groups:
+                self._group_items[name].setText(name)
+            for row, name in enumerate(names):
+                self.results_model.item(row, 0).setText(name)
                 for column in range(1, len(RESULT_HEADERS)):
-                    self.results_model.item(index, column).setText("—")
+                    self.results_model.item(row, column).setText("—")
             return
         # échelle de couleurs sur l'étendue de la carte : c'est le relief qui compte
         scene.set_field(result.surface, float(result.surface.min()), result.hottest)
@@ -601,7 +913,7 @@ class MainController(QtCore.QObject):
             source = item.source
             labels.append(f"{source.name}  {item.junction:.0f} °C")
             brush = self._margin_brush(item.margin)
-            row = root.child(index)
+            row = self._source_items[index]
             row.setText(f"{source.name} — {source.power:.0f} W — Tj {item.junction:.0f} °C")
             row.setForeground(QtGui.QBrush(theme.color("danger"))
                               if item.margin is not None and item.margin < 0
@@ -615,8 +927,37 @@ class MainController(QtCore.QObject):
                 cell.setText(text)
                 cell.setForeground(brush if column in (5, 7)
                                    else QtGui.QBrush(theme.color("text")))
+        for offset, name in enumerate(groups):
+            members = [result.sources[i] for i in self._members(name)]
+            summary = self._group_summary(members)
+            hot, margin = summary["hottest"], summary["margin"]
+            self._group_items[name].setText(
+                f"{name} — {summary['power']:.0f} W — Tj max {hot.junction:.0f} °C")
+            self._group_items[name].setForeground(
+                QtGui.QBrush(theme.color("danger")) if margin is not None and margin < 0
+                else QtGui.QBrush(theme.color("text")))
+            brush = self._margin_brush(margin)
+            texts = [f"Σ {name}", f"{summary['power']:.0f}", "—",
+                     f"{summary['sink_max']:.1f}", f"{summary['case']:.1f}",
+                     f"{hot.junction:.1f}", "—",
+                     "—" if margin is None else f"{margin:+.1f}"]
+            for column, text in enumerate(texts):
+                cell = self.results_model.item(len(self.sources) + offset, column)
+                cell.setText(text)
+                cell.setForeground(brush if column in (5, 7)
+                                   else QtGui.QBrush(theme.color("text")))
         scene.set_labels(labels)
         root.setText(f"{title} — max {result.hottest:.0f} °C")
+
+    @staticmethod
+    def _group_summary(members: list) -> dict:
+        """Synthèse d'un groupe à partir des résultats de ses sources."""
+        margins = [m.margin for m in members if m.margin is not None]
+        return {"power": sum(m.source.power for m in members),
+                "sink_max": max(m.sink_max for m in members),
+                "case": max(m.case for m in members),
+                "hottest": max(members, key=lambda m: m.junction),
+                "margin": min(margins) if margins else None}
 
     def _show_results(self):
         result = self.result
@@ -641,8 +982,9 @@ class MainController(QtCore.QObject):
             info.child(name).setValue(text)
         totals = self.heatsink_params.child("Résultats")
         readouts = self.source_params.child("Résultats")
+        group_readouts = self.group_params.child("Résultats")
         if result is None:
-            for group in (totals, readouts):
+            for group in (totals, readouts, group_readouts):
                 for child in group.children():
                     child.setValue("—")
             return
@@ -653,6 +995,13 @@ class MainController(QtCore.QObject):
         totals.child(H_AIR_OUT).setValue(
             "—" if self.conditions.mode == NATURAL and self.conditions.horizontal
             else f"{result.air_outlet:.1f} °C")
+        inside = result.internal_h is not None
+        share = f" ({_fr(100 * result.internal_ratio)} %)" if result.power else ""
+        totals.child(H_FINS).setValue(f"{result.convected:.0f} W")
+        totals.child(H_INSIDE).setValue(f"{result.internal_power:.0f} W{share}" if inside
+                                        else "— (non calculé)")
+        totals.child(H_INSIDE_COEFFICIENT).setValue(
+            f"{_fr(result.internal_h)} W/m².K" if inside else "—")
         if 0 <= self.selected < len(result.sources):
             item = result.sources[self.selected]
             readouts.child(R_SINK_MEAN).setValue(f"{item.sink_mean:.1f} °C")
@@ -661,6 +1010,16 @@ class MainController(QtCore.QObject):
             readouts.child(R_JUNCTION).setValue(f"{item.junction:.1f} °C")
             readouts.child(R_MARGIN).setValue(
                 "—" if item.margin is None else f"{item.margin:+.1f} K")
+        members = [result.sources[i] for i in self._members(self.selected_group)
+                   if i < len(result.sources)]
+        if members:
+            summary = self._group_summary(members)
+            hot, margin = summary["hottest"], summary["margin"]
+            group_readouts.child(G_SINK_MAX).setValue(f"{summary['sink_max']:.1f} °C")
+            group_readouts.child(G_HOTTEST).setValue(
+                f"{hot.junction:.1f} °C ({hot.source.name})")
+            group_readouts.child(G_MARGIN).setValue(
+                "—" if margin is None else f"{margin:+.1f} K")
 
     # ------------------------------------------------------------ fichiers de projet
     def project(self) -> Project:
@@ -683,7 +1042,7 @@ class MainController(QtCore.QObject):
         self.length = project.length
         self.conditions = project.conditions
         self.sources = list(project.sources)
-        self.selected = -1
+        self.selected, self.selected_group = -1, ""
         self.project_path = pathlib.Path(path) if path else None
         self._show_project_values()
         self._plate_changed()

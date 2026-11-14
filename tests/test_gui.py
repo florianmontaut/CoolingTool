@@ -253,3 +253,23 @@ def test_fiche_mesuree_dans_l_interface(ctrl):
     assert conditions.child(mc.P_BLACK).value() is False
     ctrl.select(-1)
     assert info.child(mc.H_WINDOW).value() == "21390 mm² (largeur × hauteur d'ailettes)"
+
+
+def test_echange_avec_l_interieur_du_boitier(ctrl):
+    conditions = ctrl.project_params.child("Conditions")
+    assert not conditions.child(mc.P_INSIDE_T).opts["visible"]
+    ctrl.select(-1)
+    totals = ctrl.heatsink_params.child("Résultats")
+    assert totals.child(mc.H_INSIDE).value() == "— (non calculé)"
+    conditions.child(mc.P_INSIDE).setValue(True)
+    assert conditions.child(mc.P_INSIDE_T).opts["visible"]
+    assert conditions.child(mc.P_BLACK).opts["visible"]      # rayonnement de la face
+    assert ctrl.conditions.internal == mc.DEFAULT_INTERNAL
+    conditions.child(mc.P_INSIDE_T).setValue(40.0)
+    result = ctrl.result
+    assert result.internal_power > 0
+    assert totals.child(mc.H_INSIDE).value() \
+        == f"{result.internal_power:.0f} W ({mc._fr(100 * result.internal_ratio)} %)"
+    assert totals.child(mc.H_FINS).value() == f"{result.convected:.0f} W"
+    conditions.child(mc.P_INSIDE_H).setValue(20.0)
+    assert totals.child(mc.H_INSIDE_COEFFICIENT).value() == "20 W/m².K"

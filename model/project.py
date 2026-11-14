@@ -32,12 +32,13 @@ class Project:
                 "mode": c.mode, "ambient_C": c.ambient, "speed_m_s": c.speed,
                 "altitude_m": c.altitude, "reversed_flow": c.reversed_flow,
                 "black_anodised": c.black_anodised, "horizontal": c.horizontal,
+                "internal_C": c.internal, "internal_h_W_m2K": c.internal_h,
             },
             "sources": [{
                 "name": s.name, "x_mm": s.x * MM, "y_mm": s.y * MM,
                 "size_x_mm": s.size_x * MM, "size_y_mm": s.size_y * MM,
                 "power_W": s.power, "rth_jc_K_W": s.rth_jc, "rth_cs_K_W": s.rth_cs,
-                "tj_max_C": s.tj_max,
+                "tj_max_C": s.tj_max, "group": s.group,
             } for s in self.sources],
         }
 
@@ -53,12 +54,15 @@ class Project:
                 altitude=float(c.get("altitude_m", 0.0)),
                 reversed_flow=bool(c.get("reversed_flow", False)),
                 black_anodised=bool(c.get("black_anodised", False)),
-                horizontal=bool(c.get("horizontal", False)))
+                horizontal=bool(c.get("horizontal", False)),
+                internal=(None if c.get("internal_C") is None else float(c["internal_C"])),
+                internal_h=float(c.get("internal_h_W_m2K", 0.0)))
             sources = [Source(
                 name=str(s["name"]), x=s["x_mm"] / MM, y=s["y_mm"] / MM,
                 size_x=s["size_x_mm"] / MM, size_y=s["size_y_mm"] / MM,
                 power=float(s["power_W"]), rth_jc=float(s.get("rth_jc_K_W", 0.0)),
                 rth_cs=float(s.get("rth_cs_K_W", 0.0)), tj_max=s.get("tj_max_C"),
+                group=str(s.get("group") or ""),
             ) for s in data.get("sources", [])]
             return cls(heatsink_name=data["heatsink"]["name"],
                        manufacturer=data["heatsink"].get("manufacturer", ""),

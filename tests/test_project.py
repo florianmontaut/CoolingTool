@@ -46,8 +46,10 @@ def test_projet_aller_retour(tmp_path):
     project = Project(
         heatsink_name="P300 83A", manufacturer="Mecc.Al", length=0.35,
         conditions=Conditions(NATURAL, ambient=45.0, speed=2.0, altitude=1500.0,
-                              reversed_flow=True, black_anodised=True, horizontal=True),
-        sources=[Source("IGBT haut", 0.1, 0.2, 0.0614, 0.1064, 320.0, 0.05, 0.02, 150.0),
+                              reversed_flow=True, black_anodised=True, horizontal=True,
+                              internal=80.0, internal_h=12.0),
+        sources=[Source("IGBT haut", 0.1, 0.2, 0.0614, 0.1064, 320.0, 0.05, 0.02, 150.0,
+                        group="Onduleur"),
                  Source("Q2", 0.2, 0.1, 0.0099, 0.0101, 8.0)])
     path = tmp_path / f"essai{EXTENSION}"
     project.save(path)
@@ -61,8 +63,15 @@ def test_projet_aller_retour(tmp_path):
     assert loaded.heatsink_name == "P300 83A" and loaded.manufacturer == "Mecc.Al"
     assert loaded.length == pytest.approx(0.35)
     assert loaded.conditions == project.conditions
+    # anciens projets : sans face intérieure ni groupes
+    del data["conditions"]["internal_C"], data["conditions"]["internal_h_W_m2K"]
+    for source in data["sources"]:
+        del source["group"]
+    old = Project.from_dict(data)
+    assert old.conditions.internal is None and old.conditions.internal_h == 0.0
+    assert [s.group for s in old.sources] == ["", ""]
     for a, b in zip(loaded.sources, project.sources):
-        assert a.name == b.name and a.tj_max == b.tj_max
+        assert a.name == b.name and a.tj_max == b.tj_max and a.group == b.group
         assert (a.x, a.y, a.size_x, a.size_y, a.power, a.rth_jc, a.rth_cs) \
             == pytest.approx((b.x, b.y, b.size_x, b.size_y, b.power, b.rth_jc, b.rth_cs))
 

@@ -3,16 +3,21 @@
 Scène thermique : la semelle du dissipateur vue de dessus (face de montage), sa carte de
 température, et les sources de chaleur, déplaçables à la souris. Coordonnées en mm :
 x selon la largeur, y selon la longueur (sens de l'air, vers le haut).
+
+La scène ne connaît pas les groupes : elle signale le déplacement d'une source, avec
+l'état de la touche Alt au moment où on l'a saisie (Alt : la source seule), et le
+contrôleur déplace le reste du groupe.
 """
 import numpy as np
 import pyqtgraph as pg
-from PyQt6 import QtCore, QtGui
+from PyQt6 import QtCore, QtGui, QtWidgets
 
 from qtsocle import theme
 
 COLOR_MAP = "CET-R4"            # du bleu (froid) au rouge (chaud)
 SOURCE_PEN = pg.mkPen("#101418", width=1.5)
 SELECTED_PEN = pg.mkPen("#FFFFFF", width=3)
+GROUP_PEN = pg.mkPen("#FFFFFF", width=1.5, style=QtCore.Qt.PenStyle.DashLine)
 HOVER_PEN = pg.mkPen("#FFFFFF", width=1.5)
 LABEL_FILL = pg.mkBrush(16, 20, 24, 170)
 LABEL_COLOR = "#FFFFFF"
@@ -50,9 +55,10 @@ class SourceItem(pg.ROI):
 
 
 class ThermalScene(pg.GraphicsLayoutWidget):
-    # index de la source, centre x, centre y (mm) : émis pendant le déplacement
-    sourceMoved = QtCore.pyqtSignal(int, float, float)
-    # index de la source sélectionnée à la souris, -1 pour aucune
+    # index de la source, centre x, centre y (mm), Alt enfoncée à la saisie (la source
+    # seule, sans son groupe) : émis pendant le déplacement
+    sourceMoved = QtCore.pyqtSignal(int, float, float, bool)
+    # index de la source sélectionnée à la souris, -1 pour aucune (Alt : voir alone)
     sourceSelected = QtCore.pyqtSignal(int)
 
     def __init__(self, parent=None):
@@ -81,6 +87,9 @@ class ThermalScene(pg.GraphicsLayoutWidget):
 
         self.items_: list = []
         self._selected = -1
+        self._highlighted: set = set()      # sources mises en évidence (groupe)
+        self._related: set = set()          # reste du groupe de la source sélectionnée
+        self.alone = False                  # Alt enfoncée à la dernière saisie
         self._bounds = QtCore.QRectF(0, 0, 1, 1)
         self._moving = False            # déplacement venu du modèle : pas de signal
         self.plot.scene().sigMouseClicked.connect(self._scene_clicked)
@@ -143,47 +152,63 @@ class ThermalScene(pg.GraphicsLayoutWidget):
                 self.items_.append(item)
         finally:
             self._moving = False
-        self.select(self._selected if self._selected < len(self.items_) else -1)
+        self.select(self._selected if self._selected < len(self.items_) else -1,
+                    {i for i in self._highlighted if i < len(self.items_)},
+                    self._related)
 
     def set_labels(self, texts: list):
         for item, text in zip(self.items_, texts):
             item.label.setText(text)
 
-    def select(self, index: int):
-        """Met en évidence la source index (-1 : aucune), sans émettre de signal."""
+    def select(self, index: int, highlighted=(), related=()):
+        """
+        Met en évidence la source index (-1 : aucune), sans émettre de signal ;
+        highlighted : autres sources affichées comme sélectionnées (un groupe entier) ;
+        related : sources liées à la sélection (le reste de son groupe), en pointillés.
+        """
         self._selected = index
+        self._highlighted = set(highlighted) | ({index} if index >= 0 else set())
+        self._related = set(related) - self._highlighted
         for item in self.items_:
-            selected = item.index == index
-            item.setPen(SELECTED_PEN if selected else SOURCE_PEN)
+            selected = item.index in self._highlighted
+            item.setPen(SELECTED_PEN if selected
+                        else GROUP_PEN if item.index in self._related else SOURCE_PEN)
             item.setZValue(11 if selected else 10)
 
     def source_rect(self, index: int) -> tuple:
         item = self.items_[index]
         return item.pos().x(), item.pos().y(), item.size().x(), item.size().y()
 
-    def move_source(self, index: int, x: float, y: float):
-        """Déplace une source comme le ferait la souris (centre en mm) : pour les tests."""
+    def move_source(self, index: int, x: float, y: float, alone: bool = False):
+        """
+        Déplace une source comme le ferait la souris (centre en mm), Alt enfoncée si
+        alone : pour les tests.
+        """
         item = self.items_[index]
         size = item.size()
-        item.sigRegionChangeStarted.emit(item)
+        self._press(item, alone)
         target = QtCore.QPointF(x - size.x() / 2, y - size.y() / 2)
         item.translate(target - item.pos())        # retenu dans la semelle, comme à la souris
         item.sigRegionChangeFinished.emit(item)
 
     def _item_moved(self, item: SourceItem):
         if not self._moving:
-            self.sourceMoved.emit(item.index, *item.centre())
+            self.sourceMoved.emit(item.index, *item.centre(), self.alone)
 
     def _item_pressed(self, item: SourceItem, *_):
-        if item.index != self._selected:
-            self.select(item.index)
-            self.sourceSelected.emit(item.index)
+        modifiers = QtWidgets.QApplication.keyboardModifiers()
+        self._press(item, bool(modifiers & QtCore.Qt.KeyboardModifier.AltModifier))
+
+    def _press(self, item: SourceItem, alone: bool):
+        """Saisie d'une source : le contrôleur décide de la sélection (source ou groupe)."""
+        self.alone = alone
+        self.sourceSelected.emit(item.index)
 
     def _scene_clicked(self, event):
         if event.button() != QtCore.Qt.MouseButton.LeftButton:
             return
         under = self.plot.scene().items(event.scenePos())
-        if not any(isinstance(item, SourceItem) for item in under) and self._selected != -1:
+        if not any(isinstance(item, SourceItem) for item in under) and self._highlighted:
             self.select(-1)
             self.sourceSelected.emit(-1)
 

@@ -33,10 +33,12 @@ Dépôt : https://github.com/florianmontaut/CoolingTool (branche `main`).
     échange côté ailettes, échauffement de l'air canal par canal.
     Transformée en cosinus selon x + systèmes bande : 5 à 30 ms par calcul.
   - `simulation.py` : `Conditions`, `Source`, `calibrate` (h tiré de la fiche),
-    `simulate` (températures de semelle, de boîtier, de jonction, marges).
+    `simulate` (températures de semelle, de boîtier, de jonction, marges, part de la
+    puissance cédée à l'intérieur du boîtier).
   - `heatsink.py`, `curves.py`, `library.py` : fiches de dissipateurs (catalogue ou
     mesure) et leurs courbes de correction (JSON).
-  - `air.py` : masse volumique, pression selon l'altitude.
+  - `air.py` : masse volumique, pression selon l'altitude ; convection naturelle d'une
+    plaque verticale (Churchill et Chu) et rayonnement, pour la face intérieure.
   - `analytic.py` : série de Fourier de l'épanouissement, référence des tests.
 - `library/` : `dissipateurs/*.json` (fiches, en mm), `courbes/*.json` (abaques ou lois
   en puissance, deux points suffisent : l'interpolation log-log les reproduit) et
@@ -52,8 +54,9 @@ Dépôt : https://github.com/florianmontaut/CoolingTool (branche `main`).
   paramètres (élément sélectionné ; dissipateur, conditions, actions).
 - `controller/main_controller.py` : tient le projet (dissipateur, longueur, sources,
   conditions), relance `simulate` à chaque changement, y compris pendant un déplacement
-  à la souris, et met à jour la scène, l'arborescence et les résultats. Gère aussi la
-  librairie (option « Répertoire de la librairie ») et les fichiers de projet.
+  à la souris (en repartant du résultat précédent : `start`), et met à jour la scène,
+  l'arborescence et les résultats. Gère les groupes de sources, la librairie (option
+  « Répertoire de la librairie ») et les fichiers de projet.
 - `tests/` : `reference_solver.py` est une seconde écriture du solveur (matrice creuse),
   comparée à la première ; les autres tests s'appuient sur des solutions analytiques.
   `test_validation.py` prédit les essais de l'utilisateur à partir des seules fiches ; il
@@ -80,8 +83,22 @@ Dépôt : https://github.com/florianmontaut/CoolingTool (branche `main`).
   naturelle (essai KL-288 : 8 % d'écart sans, 1,6 % avec).
 - Convection naturelle, ailettes verticales : l'air monte et s'échauffe ; son
   échauffement en haut vaut `natural_air_ratio` (0,35, essai KL-288) fois l'échauffement
-  moyen de la semelle. h ~ échauffement^0,25. Double point fixe (h, débit d'air).
-  Ailettes horizontales : air à l'ambiante partout.
+  moyen de la semelle. h ~ échauffement^0,25. Ailettes horizontales : air à l'ambiante
+  partout.
+- Point fixe unique dans `simulate` : h et débit d'air (naturelle) et échange intérieur
+  sont mis à jour ensemble, une résolution par itération (5 en naturelle, 2 en repartant
+  d'un résultat précédent du même calage). Ne pas revenir à des boucles imbriquées :
+  c'était 60 résolutions et 0,5 à 0,7 s par calcul.
+- Face intérieure (`Conditions.internal`) : dissipateur en paroi du boîtier, ailettes
+  dehors. La face de montage non couverte par les sources échange avec l'intérieur :
+  convection naturelle d'une plaque verticale (hauteur = longueur, largeur si ailettes
+  horizontales) + rayonnement (émissivité 0,85 anodisé, 0,15 brut) vers des parois à la
+  température interne ; ou h imposé (`internal_h`). Cet échange est une puissance
+  retranchée sur la face de montage : le solveur reste inchangé.
+- Groupes : `Source.group` porte le nom du groupe (un seul niveau). Le contrôleur
+  déplace, pivote, clone et supprime un groupe d'un bloc (`_shift` le garde entier dans
+  la semelle). Sur la scène, saisir une source groupée prend le groupe ; Alt, la source
+  seule. La scène ne connaît pas les groupes : elle transmet l'état d'Alt.
 - Finition : une fiche `anodised` donne sa Rth naturelle pour une surface anodisée noire ;
   `finish_factor` ne la recorrige pas. Le contrôleur règle « Anodisé noir » sur la
   finition de la fiche quand on change de dissipateur.
@@ -119,6 +136,7 @@ Dépôt : https://github.com/florianmontaut/CoolingTool (branche `main`).
   ceux en 6061), même si un catalogue annonce davantage.
 - Cas d'usage type : air à 55 °C au niveau des ailettes ; 85 °C est la température
   maximale tolérée à l'intérieur du boîtier, pas celle de l'air de refroidissement.
+- Dissipateurs toujours placés à l'extérieur du boîtier, face de montage dedans.
 
 ## Non validé
 
@@ -141,10 +159,18 @@ Dépôt : https://github.com/florianmontaut/CoolingTool (branche `main`).
   de librairie, le tableau de résultats et les fichiers de projet n'ont été vus par
   Claude qu'en capture sans écran.
 - Librairie sur un vrai partage réseau.
+- Échange avec l'intérieur : corrélations de plaque libre, aucune mesure. Les
+  composants, cartes et câbles devant la face gênent la convection ; le rayonnement suppose
+  des parois à la température interne.
+- Groupes et face intérieure : vus seulement en tests et en capture sans écran.
 
 ## Limites connues
 
-- Régime permanent seulement.
+- Régime permanent seulement. Pour un transitoire (surcharge, essai d'arrêt en tunnel),
+  il faudra un calcul lancé à part, dans un thread, avec progression et annulation.
+- Échange intérieur par la face de montage seulement : ni le dessus des boîtiers, ni
+  les barres de puissance, ni le circuit imprimé (souvent les fuites les plus fortes).
+- Les étiquettes de sources voisines se chevauchent sur la scène.
 - Pas d'effet d'entrée (h plus fort au bord d'attaque), pas de fuite d'air.
 - Convection naturelle : `natural_air_ratio` tiré d'un seul essai ; pas de calcul du
   tirage d'air à partir de la géométrie.
