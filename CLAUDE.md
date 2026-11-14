@@ -40,16 +40,22 @@ Dépôt : https://github.com/florianmontaut/CoolingTool (branche `main`).
   - `air.py` : masse volumique, pression selon l'altitude ; convection naturelle d'une
     plaque verticale (Churchill et Chu) et rayonnement, pour la face intérieure.
   - `analytic.py` : série de Fourier de l'épanouissement, référence des tests.
+  - `references.py` : repères de dimensionnement (`library/reperes.json`).
 - `library/` : `dissipateurs/*.json` (fiches, en mm), `courbes/*.json` (abaques ou lois
   en puissance, deux points suffisent : l'interpolation log-log les reproduit) et
   `sources/*.json` (modèles de sources : empreinte et valeurs par défaut).
+  `reperes.json` : repères de dimensionnement de l'utilisateur (densités de flux par
+  mode de refroidissement, chiffres clés), affichés par Aide › Repères (F1).
   Fiches Meccal (catalogue) et Seifert KL-250, KL-271, KL-288 à 350 mm (mesures de
   l'utilisateur et sa loi empirique des dissipateurs de 83 mm).
 - `view/scene.py` : `ThermalScene`, la semelle vue de dessus, sa carte de température et
   les sources (`SourceItem`, un `pg.ROI` retenu dans la semelle). Coordonnées en mm.
   - `project.py` : `Project`, le fichier de projet (`*.cooling.json`, en mm). Le
     dissipateur y est cité par son nom : il doit être dans la librairie à l'ouverture.
-- `view/main_window.py` : à gauche l'arborescence du projet puis la librairie (filtre et
+- `view/references_dialog.py` : fenêtre non modale des repères ; les pertes admissibles
+  par source y sont calculées (densité × empreinte de chaque modèle de la librairie).
+- `view/main_window.py` : barre de menus (Fichier, Sources, Affichage, Aide) qui reprend
+  les actions de la barre d'outils ; à gauche l'arborescence du projet puis la librairie (filtre et
   table) ; au centre la scène puis le tableau de résultats ; à droite deux arbres de
   paramètres (élément sélectionné ; dissipateur, conditions, actions).
 - `controller/main_controller.py` : tient le projet (dissipateur, longueur, sources,
@@ -137,6 +143,12 @@ Dépôt : https://github.com/florianmontaut/CoolingTool (branche `main`).
 - Cas d'usage type : air à 55 °C au niveau des ailettes ; 85 °C est la température
   maximale tolérée à l'intérieur du boîtier, pas celle de l'air de refroidissement.
 - Dissipateurs toujours placés à l'extérieur du boîtier, face de montage dedans.
+- Repères (retour d'expérience, calculs et essais sur modules de puissance) : 5 W/cm²
+  sous la source en convection naturelle, 15 en forcée, 60 en liquide sans changement
+  de phase. Convection naturelle : 450 à 500 W au plus par dissipateur (ambiante 50 °C,
+  85 °C au maximum, extrudés ou ailettes rapportées de 110 à 120 mm), limite pratique
+  de la répartition des pertes ; environ 1 000 W avec un assemblage à caloducs.
+  Pour l'instant affichés seulement (menu), sans vérification en direct.
 
 ## Non validé
 

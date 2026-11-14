@@ -18,9 +18,11 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from qtsocle import options_panel, settings, theme
 from model import library
 from model.project import EXTENSION, Project
+from model.references import FILE_NAME as REFERENCES_FILE, load_references
 from model.simulation import (FORCED, NATURAL, CalibrationError, Conditions, Source,
                               simulate)
 from ressources import app_settings
+from view.references_dialog import ReferencesDialog
 
 MM = 1000.0
 DEFAULT_AMBIENT = 55.0              # °C, air au niveau des ailettes
@@ -120,6 +122,7 @@ class MainController(QtCore.QObject):
         self.modified = False
         self.selected = -1              # source sélectionnée, -1 : aucune
         self.selected_group = ""        # groupe sélectionné (selected vaut alors -1)
+        self.references_dialog = None   # fenêtre des repères, non modale
         self._source_items, self._group_items = {}, {}      # arborescence
         self.result = None
         self._updating = False          # changement venu du contrôleur : pas de boucle
@@ -156,6 +159,8 @@ class MainController(QtCore.QObject):
         view.actionUngroup.triggered.connect(self.ungroup)
         view.actionOptions.triggered.connect(self.edit_options)
         view.actionDark.toggled.connect(self.set_dark_mode)
+        view.actionReferences.triggered.connect(self.show_references)
+        view.actionAbout.triggered.connect(self.show_about)
         view.closing.connect(self.save_settings)
         view.can_close = self.confirm_discard
         view.scene.sourceMoved.connect(self._source_dragged)
@@ -1138,6 +1143,38 @@ class MainController(QtCore.QObject):
 
     def _error(self, text: str):
         QtWidgets.QMessageBox.warning(self.view, "CoolingTool", text)
+
+    # ------------------------------------------------------------ aide
+    def show_references(self, *_):
+        """
+        Repères de dimensionnement : ceux de la librairie choisie, sinon ceux de la
+        librairie livrée. Fenêtre non modale, réutilisée.
+        """
+        folder = self.library_dir
+        if not (folder / REFERENCES_FILE).is_file():
+            folder = self.bundled_library
+        try:
+            references = load_references(folder)
+        except (OSError, ValueError) as error:
+            self._error(f"Impossible de lire les repères de dimensionnement :\n{error}")
+            return
+        if self.references_dialog is not None:
+            self.references_dialog.close()
+            self.references_dialog.deleteLater()
+        # parentée à la fenêtre : détruite avec elle
+        self.references_dialog = ReferencesDialog(references, self.models.values(),
+                                                  self.view)
+        self.references_dialog.show()
+        self.references_dialog.raise_()
+
+    def show_about(self, *_):
+        app = QtWidgets.QApplication.instance()
+        version = app.applicationVersion()
+        QtWidgets.QMessageBox.about(
+            self.view, "À propos de CoolingTool",
+            f"<b>CoolingTool</b> {version}<br>Simulation thermique 2D d'un dissipateur "
+            "et de ses sources de chaleur, en régime permanent.<br><br>"
+            f"Librairie : {self.library_dir}")
 
     # ------------------------------------------------------------ thème
     def set_dark_mode(self, enabled: bool):

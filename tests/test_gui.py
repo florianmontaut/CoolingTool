@@ -273,3 +273,45 @@ def test_echange_avec_l_interieur_du_boitier(ctrl):
     assert totals.child(mc.H_FINS).value() == f"{result.convected:.0f} W"
     conditions.child(mc.P_INSIDE_H).setValue(20.0)
     assert totals.child(mc.H_INSIDE_COEFFICIENT).value() == "20 W/m².K"
+
+
+# ------------------------------------------------------------------ aide
+def test_menus_reprennent_les_actions(ctrl):
+    titles = [action.text() for action in ctrl.view.menuBar().actions()]
+    assert titles == ["&Fichier", "&Sources", "&Affichage", "&Aide"]
+    sources = ctrl.view.menuBar().actions()[1].menu().actions()
+    assert ctrl.view.actionGroup in sources and ctrl.view.actionAdd in sources
+
+
+def test_reperes_de_dimensionnement(ctrl):
+    ctrl.view.actionReferences.trigger()
+    dialog = ctrl.references_dialog
+    assert dialog is not None and dialog.isVisible() and ctrl.errors == []
+    densities = dialog.density_table
+    assert [densities.item(row, 1).text() for row in range(3)] == ["5", "15", "60"]
+    # par source : densité × empreinte ; module 62 mm (61,4 × 106,4 mm) en tête
+    table = dialog.source_table
+    assert table.item(0, 0).text() == "Module 62 mm"
+    area = 6.14 * 10.64
+    assert [table.item(0, column).text() for column in (2, 3, 4)] == [
+        f"{5 * area:.0f}", f"{15 * area:.0f}", f"{60 * area:.0f}"]
+    text = dialog.figures.toPlainText()
+    assert "450 à 500 W au plus" in text and "environ 1 000 W" in text
+    # une seconde ouverture remplace la fenêtre
+    ctrl.view.actionReferences.trigger()
+    assert ctrl.references_dialog is not dialog
+
+
+def test_reperes_de_la_librairie_choisie(ctrl, tmp_path):
+    import shutil
+    library = tmp_path / "librairie"
+    shutil.copytree(mc.pathlib.Path(ctrl.bundled_library), library)
+    (library / "reperes.json").write_text('{"format": "autre"}', encoding="utf-8")
+    ctrl.apply_options({"library_dir": str(library)})
+    ctrl.show_references()
+    assert ctrl.errors and "format de repères inconnu" in ctrl.errors[0]
+    # sans fichier dans la librairie choisie : ceux de la librairie livrée
+    (library / "reperes.json").unlink()
+    ctrl.errors.clear()
+    ctrl.show_references()
+    assert ctrl.errors == [] and "caloducs" in ctrl.references_dialog.figures.toPlainText()

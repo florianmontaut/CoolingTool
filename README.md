@@ -68,6 +68,9 @@ hypothèses.
 - `library/courbes/` : courbes de correction (vitesse d'air, longueur ; longueur en
   convection naturelle si elle diffère), relevées sur un abaque ou tirées d'une loi.
 - `library/sources/` : modèles de sources de chaleur (empreinte, pertes et Rth par défaut).
+- `library/reperes.json` : repères de dimensionnement (densités de flux admissibles,
+  chiffres clés), affichés par Aide › Repères de dimensionnement (F1). Modifiable à la
+  main ; une librairie choisie dans les options peut avoir le sien.
 
 ## Construire l'exécutable
 

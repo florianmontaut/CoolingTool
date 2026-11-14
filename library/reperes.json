@@ -1,0 +1,21 @@
+{
+ "format": "CoolingTool repères v1",
+ "source": "Retour d'expérience de l'équipe : calculs et essais sur des modules de puissance. Repères pour un premier choix du mode de refroidissement ; la simulation les précise.",
+ "density_notes": "Pertes d'une source divisées par son empreinte sur la semelle. Établi sur des modules de puissance : ne s'applique pas tel quel aux petits boîtiers (TOLT, Q-DPAK), dont la chaleur s'épanouit dans la semelle.",
+ "densities": [
+  {"cooling": "Convection naturelle", "W_cm2": 5},
+  {"cooling": "Convection forcée", "W_cm2": 15},
+  {"cooling": "Refroidissement liquide (sans changement de phase)", "W_cm2": 60,
+   "notes": "Non simulé par CoolingTool."}
+ ],
+ "figures": [
+  {"subject": "Convection naturelle, un dissipateur",
+   "value": "450 à 500 W au plus",
+   "conditions": "Ambiante 50 °C, 85 °C au maximum ; profilés extrudés ou ailettes rapportées de 110 à 120 mm de haut",
+   "notes": "Au-delà, il faudrait répartir les pertes sur une très grande surface (plusieurs modules en parallèle) : ni réaliste ni économique."},
+  {"subject": "Convection naturelle, assemblage à caloducs",
+   "value": "environ 1 000 W",
+   "conditions": "Environ 9 caloducs de 16 mm de diamètre et 700 mm de long : 150 mm de zone chaude (semelle aluminium portant les modules), 450 à 500 mm d'ailettes serties",
+   "notes": "Une quarantaine d'ailettes aluminium de 1 à 1,5 mm d'épaisseur, de 180 × 380 mm chacune ; volume d'échangeur acceptable. Non simulé par CoolingTool."}
+ ]
+}

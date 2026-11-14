@@ -26,6 +26,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # modifié, enregistrement annulé)
         self.can_close = None
         self._build_actions()
+        self._build_menus()
         self._build_panels()
         self.refresh_theme()
 
@@ -75,6 +76,33 @@ class MainWindow(QtWidgets.QMainWindow):
         toolbar.addSeparator()
         self.actionOptions = action("Options...", "settings", "Options de l'application")
         self.actionDark = action("Thème sombre", "moon", "Thème sombre", checkable=True)
+
+    def _build_menus(self):
+        """Barre de menus : reprend les actions de la barre d'outils, plus l'aide."""
+        menus = self.menuBar()
+        files = menus.addMenu("&Fichier")
+        files.addActions([self.actionNew, self.actionOpen, self.actionSave,
+                          self.actionSaveAs])
+        files.addSeparator()
+        files.addAction(self.actionOptions)
+        files.addSeparator()
+        self.actionQuit = files.addAction("Quitter")
+        self.actionQuit.setShortcut(QtGui.QKeySequence("Ctrl+Q"))
+        self.actionQuit.triggered.connect(self.close)
+        sources = menus.addMenu("&Sources")
+        sources.addActions([self.actionAdd, self.actionClone, self.actionRotate,
+                            self.actionDelete])
+        sources.addSeparator()
+        sources.addActions([self.actionGroup, self.actionUngroup])
+        view = menus.addMenu("&Affichage")
+        view.addAction(self.actionDark)
+        help_menu = menus.addMenu("&Aide")
+        self.actionReferences = help_menu.addAction("Repères de dimensionnement...")
+        self.actionReferences.setShortcut(QtGui.QKeySequence("F1"))
+        self.actionReferences.setToolTip("Ordres de grandeur pour un premier choix du "
+                                         "mode de refroidissement (F1)")
+        help_menu.addSeparator()
+        self.actionAbout = help_menu.addAction("À propos de CoolingTool")
 
     def _build_panels(self):
         # gauche : projet, puis librairie
