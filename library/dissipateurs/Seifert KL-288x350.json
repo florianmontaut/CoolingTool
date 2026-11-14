@@ -1,0 +1,24 @@
+{
+ "format": "CoolingTool dissipateur v1",
+ "name": "KL-288x350",
+ "manufacturer": "Seifert",
+ "origin": "mesure",
+ "width_mm": 400,
+ "height_mm": 83,
+ "base_mm": 16,
+ "mass_kg_per_m": 35.76,
+ "air_window_mm2": 24222,
+ "anodised": true,
+ "conductivity_W_mK": 200,
+ "rth": {
+  "length_mm": 350,
+  "natural_K_W": 0.1092,
+  "natural_delta_T_K": 55,
+  "forced_K_W": 0.042033,
+  "forced_speed_m_s": 3.0,
+  "source_coverage": 0.5
+ },
+ "curves": "seifert_kl288_350",
+ "source": "Mesures de l'utilisateur et sa loi empirique des dissipateurs de 83 mm",
+ "notes": "Ailettes de 68 mm, hauteur hors tout 83 mm. Anodisé noir : la Rth naturelle (ailettes verticales) l'inclut déjà. Rth naturelle : 0.12 K/W au point le plus chaud, soit 0.1092 K/W au sens du catalogue (moyenne sous une source centrée ; rapport 0,91 établi sur le KL-288). Vitesse d'air = débit / fenêtre d'air nette (conduit avec 5 mm de jeu autour du dissipateur, moins le métal). Naturelle : Rth et échauffement de l'air (0,35 fois l'échauffement moyen de la semelle) recalés sur une mesure. Forcée : aucune mesure, loi empirique des dissipateurs de 83 mm pour 400 mm de large. Semelle de 16 mm. Ailettes ondulées."
+}

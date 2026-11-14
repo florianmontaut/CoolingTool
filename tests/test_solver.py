@@ -74,17 +74,22 @@ def test_convergence_avec_le_maillage():
     assert errors[0] > 0.08
 
 
-def test_ailette_1d():
-    """Bande chauffée à une extrémité d'une plaque mince : profil en cosh."""
+@pytest.mark.parametrize("y_factor", [1.0, 3.0])
+def test_ailette_1d(y_factor):
+    """
+    Bande chauffée à une extrémité d'une plaque mince : profil en cosh. Le facteur de
+    conduction selon y multiplie la conductance de la plaque dans ce sens.
+    """
     thickness, width, length, power = 0.002, 0.05, 0.3, 10.0
     grid = Grid(width, length, thickness, 4, 300, 1)
     injected = power * grid.coverage(0, width, 0, grid.dy)
     injected /= injected.sum() / power
-    solution = solve(grid, K, injected, AMBIENT, H)
+    solution = solve(grid, K, injected, AMBIENT, H, y_factor=y_factor)
     exchange = 1 / (thickness / (2 * K) + 1 / H)
-    m = np.sqrt(exchange / (K * thickness))
+    k_y = K * y_factor
+    m = np.sqrt(exchange / (k_y * thickness))
     y = (np.arange(grid.ny) + 0.5) * grid.dy
-    exact = power * np.cosh(m * (length - y)) / (K * thickness * width * m
+    exact = power * np.cosh(m * (length - y)) / (k_y * thickness * width * m
                                                  * np.sinh(m * length))
     computed = solution.temperature[0, :, 0] - AMBIENT
     assert computed[5:] == pytest.approx(exact[5:], rel=0.01)
@@ -126,14 +131,15 @@ def test_debit_tres_grand_equivaut_a_la_convection_naturelle():
 
 
 # ------------------------------------------------------------------ référence
+@pytest.mark.parametrize("y_factor", [1.0, 2.5])
 @pytest.mark.parametrize("nz", [1, 3])
 @pytest.mark.parametrize("rate", [None, 60.0])
-def test_identique_au_solveur_de_reference(nz, rate):
+def test_identique_au_solveur_de_reference(nz, rate, y_factor):
     grid = Grid(W, L, T, 24, 36, nz)
     coverage = grid.coverage(0.031, 0.093, 0.050, 0.151)        # source excentrée
     injected = 500.0 * coverage / coverage.sum()
-    fast = solve(grid, K, injected, AMBIENT, H, rate)
-    reference = reference_solve(grid, K, injected, AMBIENT, H, rate)
+    fast = solve(grid, K, injected, AMBIENT, H, rate, y_factor)
+    reference = reference_solve(grid, K, injected, AMBIENT, H, rate, y_factor)
     assert fast.temperature == pytest.approx(reference.temperature, abs=1e-8)
     assert fast.surface == pytest.approx(reference.surface, abs=1e-8)
     assert fast.air_out == pytest.approx(reference.air_out, abs=1e-8)

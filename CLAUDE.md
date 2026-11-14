@@ -29,15 +29,20 @@ Dépôt : https://github.com/florianmontaut/CoolingTool (branche `main`).
 - `main.py` : point d'entrée, délègue à `qtsocle.app.run`.
 - `model/` : calcul et données, sans Qt.
   - `solver.py` : conduction dans la semelle (volumes finis, quelques couches dans
-    l'épaisseur), échange côté ailettes, échauffement de l'air canal par canal.
+    l'épaisseur), anisotrope (`y_factor` : apport des ailettes selon la longueur),
+    échange côté ailettes, échauffement de l'air canal par canal.
     Transformée en cosinus selon x + systèmes bande : 5 à 30 ms par calcul.
-  - `simulation.py` : `Conditions`, `Source`, `calibrate` (h tiré du catalogue),
+  - `simulation.py` : `Conditions`, `Source`, `calibrate` (h tiré de la fiche),
     `simulate` (températures de semelle, de boîtier, de jonction, marges).
-  - `heatsink.py`, `curves.py`, `library.py` : fiches de dissipateurs et abaques (JSON).
+  - `heatsink.py`, `curves.py`, `library.py` : fiches de dissipateurs (catalogue ou
+    mesure) et leurs courbes de correction (JSON).
   - `air.py` : masse volumique, pression selon l'altitude.
   - `analytic.py` : série de Fourier de l'épanouissement, référence des tests.
-- `library/` : `dissipateurs/*.json` (fiches, en mm), `courbes/*.json` (abaques) et
+- `library/` : `dissipateurs/*.json` (fiches, en mm), `courbes/*.json` (abaques ou lois
+  en puissance, deux points suffisent : l'interpolation log-log les reproduit) et
   `sources/*.json` (modèles de sources : empreinte et valeurs par défaut).
+  Fiches Meccal (catalogue) et Seifert KL-250, KL-271, KL-288 à 350 mm (mesures de
+  l'utilisateur et sa loi empirique des dissipateurs de 83 mm).
 - `view/scene.py` : `ThermalScene`, la semelle vue de dessus, sa carte de température et
   les sources (`SourceItem`, un `pg.ROI` retenu dans la semelle). Coordonnées en mm.
   - `project.py` : `Project`, le fichier de projet (`*.cooling.json`, en mm). Le
@@ -51,21 +56,35 @@ Dépôt : https://github.com/florianmontaut/CoolingTool (branche `main`).
   librairie (option « Répertoire de la librairie ») et les fichiers de projet.
 - `tests/` : `reference_solver.py` est une seconde écriture du solveur (matrice creuse),
   comparée à la première ; les autres tests s'appuient sur des solutions analytiques.
-  `helpers.make_controller` remplace les dialogues du contrôleur.
+  `test_validation.py` prédit les essais de l'utilisateur à partir des seules fiches ; il
+  les lit dans `essais/measurements.py`, dossier **ignoré par git** (données internes de
+  l'utilisateur, à ne jamais versionner ni recopier dans un fichier suivi) et se saute
+  sans lui. `helpers.make_controller` remplace les dialogues du contrôleur.
 
 ## Choix de conception à respecter
 
 - Unités internes SI (m, W, K, °C pour les températures) ; mm dans les fichiers JSON.
 - Axes : x = largeur de la semelle, y = longueur (sens de l'extrusion et de l'air),
-  z = épaisseur. L'air va de y = 0 vers y = longueur (`reversed_flow` pour l'inverse).
+  z = épaisseur. L'air va de y = 0 vers y = longueur (`reversed_flow` pour l'inverse,
+  en convection forcée). En convection naturelle, ailettes verticales, y = 0 est en bas.
 - Le catalogue donne une résistance globale dans une condition d'essai (source uniforme
   centrée sur 50 % de la semelle). On n'applique jamais ce Rth directement : `calibrate`
   cherche le h qui fait retrouver ce Rth au modèle placé dans la condition d'essai.
   Sans cela l'échauffement de l'air serait compté deux fois.
-- Vitesse d'air = vitesse du conduit en amont, sur la section de la zone d'ailettes
-  (`Heatsink.flow_area`), sans fuite. Air chaud ou altitude : vitesse équivalente à
-  débit massique égal dans les conditions du catalogue.
-- Convection naturelle : h ~ échauffement^0,25 (point fixe), air à l'ambiante partout.
+- Vitesse d'air = débit / `Heatsink.flow_area` : la fenêtre d'air de la fiche
+  (`air_window_mm2`, convention de l'utilisateur : conduit avec 5 mm de jeu autour du
+  dissipateur, moins le métal), sinon largeur × hauteur d'ailettes. Air chaud ou
+  altitude : vitesse équivalente à débit massique égal dans les conditions de référence.
+- Conduction : selon y, toute la section de métal du profil (masse linéique / 2 700) ;
+  selon x, la semelle seule. Sans masse linéique, isotrope. Indispensable en convection
+  naturelle (essai KL-288 : 8 % d'écart sans, 1,6 % avec).
+- Convection naturelle, ailettes verticales : l'air monte et s'échauffe ; son
+  échauffement en haut vaut `natural_air_ratio` (0,35, essai KL-288) fois l'échauffement
+  moyen de la semelle. h ~ échauffement^0,25. Double point fixe (h, débit d'air).
+  Ailettes horizontales : air à l'ambiante partout.
+- Finition : une fiche `anodised` donne sa Rth naturelle pour une surface anodisée noire ;
+  `finish_factor` ne la recorrige pas. Le contrôleur règle « Anodisé noir » sur la
+  finition de la fiche quand on change de dissipateur.
 - Le solveur suppose une semelle homogène et un h uniforme : c'est ce qui permet la
   transformée en cosinus. Un h variable selon y resterait compatible ; selon x, non.
 - Interface en mm et °C, modèle en SI : les conversions sont dans le contrôleur.
@@ -87,8 +106,14 @@ Dépôt : https://github.com/florianmontaut/CoolingTool (branche `main`).
 
 ## Hypothèses confirmées par l'utilisateur
 
-- Vitesse d'air : vitesse moyenne dans un conduit de section largeur du dissipateur ×
-  hauteur d'ailettes.
+- Vitesse d'air : vitesse moyenne dans le conduit. Ses mesures la rapportent à la
+  fenêtre d'air nette (18 086,5 mm² pour le KL-271, 24 222 pour le KL-288, 10 760 pour
+  le KL-250) ; les fiches Meccal, faute de mieux, à largeur × hauteur d'ailettes.
+- Famille de 83 mm : ailettes de 68 mm, semelle de 15 mm (16 pour le KL-288). Ailettes
+  ondulées (KL-271, KL-288) ou planes (KL-250).
+- Rth naturelles de ses tableaux : dissipateurs anodisés noirs, ailettes verticales,
+  prises au point le plus chaud.
+- Données d'essais : internes, hors du dépôt (`essais/`, ignoré par git).
 - Rth du catalogue : rapporté à la température moyenne sous la source d'essai.
 - Conductivité : 200 W/m.K pour tous les extrudés (équivalence entre fabricants, dont
   ceux en 6061), même si un catalogue annonce davantage.
@@ -97,7 +122,16 @@ Dépôt : https://github.com/florianmontaut/CoolingTool (branche `main`).
 
 ## Non validé
 
-- Aucune comparaison à une mesure. L'utilisateur a des mesures sur KL-271 et KL-288.
+- Validé sur deux essais seulement, à 350 mm : KL-271 en forcée (prédiction sans
+  ajustement : 4,5 % d'écart moyen, 9 % au pire) et KL-288 en naturelle (1,6 % ; mais sa
+  Rth naturelle et `natural_air_ratio` sont calés sur ce même essai, ce n'est donc pas
+  une prédiction indépendante).
+- Rth naturelles de l'utilisateur : point le plus chaud (marge de dimensionnement de sa
+  feuille Excel). Les fiches portent l'équivalent au sens du catalogue, × 0,91 (rapport
+  établi sur le KL-288 seul) : 0,1365 (KL-271), 0,1092 (KL-288), 0,2066 (KL-250). Pas de
+  mesure en forcée du KL-288 (loi empirique), ni de l'épaisseur de semelle du KL-250.
+- Longueurs autres que 350 mm : exposants de la loi empirique (abaques Meccal), non
+  mesurés sur les profils Seifert.
 - Abaques Meccal relevés à l'œil sur le PDF (3 % environ).
 - Empreintes des sources : dimensions de boîtier usuelles ou tirées des pages Infineon,
   aucune relevée sur un plan coté (voir le champ `notes` de chaque fiche). Pour les
@@ -112,7 +146,8 @@ Dépôt : https://github.com/florianmontaut/CoolingTool (branche `main`).
 
 - Régime permanent seulement.
 - Pas d'effet d'entrée (h plus fort au bord d'attaque), pas de fuite d'air.
-- Convection naturelle : pas de différence entre le haut et le bas du dissipateur.
+- Convection naturelle : `natural_air_ratio` tiré d'un seul essai ; pas de calcul du
+  tirage d'air à partir de la géométrie.
 - Flux uniforme sous chaque source ; l'interface thermique est une résistance globale.
 - Dissipateurs extrudés seulement (pas d'ailettes rapportées, caloducs, plaques froides).
 - La librairie se lit seulement : pas d'édition ni de création de fiche depuis

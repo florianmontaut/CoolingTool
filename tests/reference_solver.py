@@ -11,13 +11,15 @@ from model.solver import Grid, Solution
 
 
 def solve(grid: Grid, conductivity: float, power: np.ndarray, ambient: float,
-          h: float, capacity_rate: float | None = None) -> Solution:
+          h: float, capacity_rate: float | None = None, y_factor: float = 1.0) -> Solution:
     """
     power           (ny, nx), W injectés par cellule sur la face de montage
     ambient         température de l'air à l'entrée (°C)
     h               coefficient d'échange ramené à la surface de la semelle (W/m2.K)
     capacity_rate   débit calorifique total de l'air, débit massique × cp (W/K) ;
-                    None : convection naturelle (air à ambient partout)
+                    None : air à ambient partout
+    y_factor        conduction selon y multipliée par ce facteur : les ailettes, continues
+                    sur toute la longueur, conduisent la chaleur dans ce sens et pas selon x
     """
     nx, ny, nz = grid.nx, grid.ny, grid.nz
     dx, dy, dz = grid.dx, grid.dy, grid.dz
@@ -42,7 +44,7 @@ def solve(grid: Grid, conductivity: float, power: np.ndarray, ambient: float,
     if nx > 1:
         couple(index[:, :, :-1], index[:, :, 1:], k * dy * dz / dx)
     if ny > 1:
-        couple(index[:, :-1, :], index[:, 1:, :], k * dx * dz / dy)
+        couple(index[:, :-1, :], index[:, 1:, :], y_factor * k * dx * dz / dy)
     if nz > 1:
         couple(index[:-1], index[1:], k * dx * dy / dz)
 

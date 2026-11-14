@@ -1,0 +1,35 @@
+{
+ "format": "CoolingTool courbes v1",
+ "name": "seifert_kl271_350",
+ "source": "KL-271x350 : Rth forcée = 0.0873467 × v^-0.48348 (v = débit / fenêtre d'air nette, m/s ; mesurée). Longueur : Rth ~ L^-0.6866 en forcée, L^-0.7198 en naturelle (loi empirique des dissipateurs de 83 mm, abaques Meccal).",
+ "speed_m_s": [
+  [
+   0.85,
+   1.0817449214
+  ],
+  [
+   4.0,
+   0.5115796317
+  ]
+ ],
+ "length_mm": [
+  [
+   50,
+   0.0681452404
+  ],
+  [
+   900,
+   0.0093654199
+  ]
+ ],
+ "length_natural_mm": [
+  [
+   50,
+   0.0598445711
+  ],
+  [
+   1000,
+   0.0069262793
+  ]
+ ]
+}

@@ -4,7 +4,9 @@ Simulation thermique 2D d'un dissipateur portant des sources de chaleur : repér
 points chauds dus au placement des composants ou à un flux de chaleur trop fort.
 
 État : moteur de calcul et interface (scène, sources déplaçables, calcul en direct,
-librairie, tableau de résultats, fichiers de projet). Non comparé à des mesures.
+librairie, tableau de résultats, fichiers de projet). Validé sur deux essais à 350 mm :
+KL-271 en convection forcée (4,5 % d'écart moyen sur l'échauffement) et KL-288 en
+convection naturelle (1,6 %).
 
 ## Lancer
 
@@ -49,8 +51,11 @@ hypothèses.
 
 ## Librairie
 
-- `library/dissipateurs/` : une fiche JSON par profilé (dimensions, Rth du catalogue).
-- `library/courbes/` : abaques de correction (vitesse d'air, longueur) d'un catalogue.
+- `library/dissipateurs/` : une fiche JSON par profilé : dimensions, Rth du catalogue ou
+  des mesures, et facultativement masse linéique (conduction des ailettes), fenêtre
+  d'air (convention de vitesse) et finition anodisée.
+- `library/courbes/` : courbes de correction (vitesse d'air, longueur ; longueur en
+  convection naturelle si elle diffère), relevées sur un abaque ou tirées d'une loi.
 - `library/sources/` : modèles de sources de chaleur (empreinte, pertes et Rth par défaut).
 
 ## Construire l'exécutable

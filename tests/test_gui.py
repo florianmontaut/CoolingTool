@@ -170,7 +170,7 @@ def test_changement_de_dissipateur_et_de_longueur(ctrl):
     # la source (106,4 mm de long) est ramenée dans la semelle raccourcie
     assert ctrl.sources[0].y == pytest.approx(0.120 - 0.1064 / 2)
     project_param(ctrl, "Dissipateur", mc.P_LENGTH).setValue(800.0)
-    assert "longueur 800 mm hors de l'abaque" in ctrl.view.statusBar().currentMessage()
+    assert "longueur 800 mm hors de la courbe" in ctrl.view.statusBar().currentMessage()
 
 
 def test_convection_naturelle(ctrl):
@@ -183,9 +183,11 @@ def test_convection_naturelle(ctrl):
     assert ctrl.result.sources[0].junction > forced
     assert not conditions.child(mc.P_SPEED).opts["visible"]
     assert conditions.child(mc.P_BLACK).opts["visible"]
-    assert not ctrl.view.scene.flow.isVisible()
+    assert ctrl.view.scene.flow.isVisible()            # ailettes verticales : l'air monte
     ctrl.select(-1)
-    assert ctrl.heatsink_params.child("Résultats", mc.H_AIR_OUT).value() == "—"
+    # l'air s'échauffe en montant le long des ailettes
+    assert ctrl.heatsink_params.child("Résultats", mc.H_AIR_OUT).value()         == f"{ctrl.result.air_outlet:.1f} °C"
+    assert ctrl.result.air_outlet > ctrl.conditions.ambient + 1.0
     natural = ctrl.result.sources[0].junction
     conditions.child(mc.P_BLACK).setValue(True)
     assert ctrl.result.sources[0].junction < natural
@@ -202,7 +204,7 @@ def test_conditions_de_convection_forcee(ctrl):
     conditions.child(mc.P_ALTITUDE).setValue(3000.0)
     assert ctrl.conditions.altitude == 3000.0
     conditions.child(mc.P_SPEED).setValue(20.0)
-    assert "hors de l'abaque" in ctrl.view.statusBar().currentMessage()
+    assert "hors de la courbe de vitesse" in ctrl.view.statusBar().currentMessage()
 
 
 # ------------------------------------------------------------------ thème, réglages
@@ -228,3 +230,26 @@ def test_reglages_enregistres_a_la_fermeture(tmp_path):
 def test_fenetre_d_options(ctrl):
     dialog = options_panel.OptionsPannel(ctrl.schema, ctrl.options, ctrl.view)
     assert dialog.getOptions() == {"library_dir": ""}
+
+
+def test_fiche_mesuree_dans_l_interface(ctrl):
+    conditions = ctrl.project_params.child("Conditions")
+    assert conditions.child(mc.P_BLACK).value() is False
+    project_param(ctrl, "Dissipateur", mc.P_REFERENCE).setValue("KL-271x350")
+    # la finition par défaut suit la fiche (Rth naturelle donnée anodisée noire)
+    assert conditions.child(mc.P_BLACK).value() is True
+    assert ctrl.conditions.black_anodised
+    ctrl.select(-1)
+    info = ctrl.heatsink_params.child("Dissipateur")
+    assert info.child(mc.H_ORIGIN).value() == "mesure, anodisé noir"
+    assert info.child(mc.H_WINDOW).value() == "18086 mm²"
+    assert info.child(mc.H_METAL).value() == "× 2.19 selon la longueur"
+    # convection naturelle : flèche d'air visible (l'air monte), cachée ailettes horizontales
+    conditions.child(mc.P_MODE).setValue(NATURAL)
+    assert ctrl.view.scene.flow.isVisible()
+    conditions.child(mc.P_HORIZONTAL).setValue(True)
+    assert not ctrl.view.scene.flow.isVisible()
+    project_param(ctrl, "Dissipateur", mc.P_REFERENCE).setValue("P300 83A")
+    assert conditions.child(mc.P_BLACK).value() is False
+    ctrl.select(-1)
+    assert info.child(mc.H_WINDOW).value() == "21390 mm² (largeur × hauteur d'ailettes)"

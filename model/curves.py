@@ -48,22 +48,36 @@ class Curve:
 
 @dataclass(frozen=True)
 class CurveSet:
-    """Abaques d'une famille de dissipateurs (un catalogue)."""
+    """
+    Courbes de correction d'une famille de dissipateurs (un catalogue, ou des mesures) :
+    facteur sur la Rth forcée selon la vitesse d'air, et selon la longueur. La longueur
+    peut avoir une courbe propre à la convection naturelle (sinon la même).
+    """
     name: str
     speed: Curve        # facteur sur Rth forcée en fonction de la vitesse (m/s)
     length: Curve       # facteur sur Rth en fonction de la longueur (m)
     source: str = ""
+    length_natural: Curve | None = None
 
     def speed_factor(self, speed: float, reference: float) -> float:
         """Rth(speed) / Rth(reference)."""
         return self.speed(speed) / self.speed(reference)
 
-    def length_factor(self, length: float, reference: float) -> float:
+    def length_curve(self, natural: bool = False) -> Curve:
+        return self.length_natural if natural and self.length_natural else self.length
+
+    def length_factor(self, length: float, reference: float, natural: bool = False) -> float:
         """Rth(length) / Rth(reference)."""
-        return self.length(length) / self.length(reference)
+        curve = self.length_curve(natural)
+        return curve(length) / curve(reference)
 
     @classmethod
     def from_dict(cls, data: dict) -> "CurveSet":
+        def lengths(points):
+            return Curve(tuple((x / 1000.0, y) for x, y in points))
+
+        natural = data.get("length_natural_mm")
         return cls(name=data["name"], source=data.get("source", ""),
                    speed=Curve(tuple(map(tuple, data["speed_m_s"]))),
-                   length=Curve(tuple((x / 1000.0, y) for x, y in data["length_mm"])))
+                   length=lengths(data["length_mm"]),
+                   length_natural=lengths(natural) if natural else None)

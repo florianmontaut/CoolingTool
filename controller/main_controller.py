@@ -50,6 +50,7 @@ R_SINK_MEAN, R_SINK_MAX, R_CASE, R_JUNCTION, R_MARGIN = (
     "Semelle (moyenne)", "Semelle (maximum)", "Boîtier", "Jonction", "Marge sur Tj max")
 H_WIDTH, H_HEIGHT, H_BASE, H_RTH_N, H_RTH_F = ("Largeur", "Hauteur", "Semelle",
                                                "Rth naturelle", "Rth forcée")
+H_ORIGIN, H_WINDOW, H_METAL = "Données", "Section d'air", "Conduction des ailettes"
 H_TARGET, H_COEFFICIENT, H_POWER, H_HOTTEST, H_AIR_OUT = (
     "Rth visée", "Coefficient d'échange", "Puissance totale", "Point le plus chaud",
     "Air en sortie")
@@ -256,7 +257,9 @@ class MainController(QtCore.QObject):
                 {"name": P_MODE, "type": "list", "limits": [FORCED, NATURAL],
                  "value": self.conditions.mode},
                 _number(P_AMBIENT, self.conditions.ambient, "°C", step=5.0),
-                _number(P_SPEED, self.conditions.speed, "m/s", limits=(0.1, 30.0), step=0.5),
+                _number(P_SPEED, self.conditions.speed, "m/s", limits=(0.1, 30.0), step=0.5,
+                        tip="Vitesse moyenne de l'air dans le conduit, rapportée à la "
+                            "section d'air de la fiche du dissipateur"),
                 _number(P_ALTITUDE, 0.0, "m", limits=(0.0, 6000.0), step=100.0),
                 {"name": P_REVERSED, "type": "bool", "value": False},
                 {"name": P_BLACK, "type": "bool", "value": False},
@@ -307,6 +310,7 @@ class MainController(QtCore.QObject):
             {"name": "Dissipateur", "type": "group", "children": [
                 _readout(P_REFERENCE), _readout(H_WIDTH), _readout(H_HEIGHT),
                 _readout(H_BASE), _readout(H_RTH_N), _readout(H_RTH_F),
+                _readout(H_ORIGIN), _readout(H_WINDOW), _readout(H_METAL),
             ]},
             {"name": "Résultats", "type": "group", "children": [
                 _readout(H_TARGET), _readout(H_COEFFICIENT), _readout(H_POWER),
@@ -338,7 +342,9 @@ class MainController(QtCore.QObject):
             group.child(name).setOpts(visible=forced)
         for name in (P_BLACK, P_HORIZONTAL):
             group.child(name).setOpts(visible=not forced)
-        self.view.scene.set_flow(forced, self.conditions.reversed_flow)
+        # convection naturelle, ailettes verticales : l'air monte (y croissant)
+        self.view.scene.set_flow(forced or not self.conditions.horizontal,
+                                 forced and self.conditions.reversed_flow)
 
     def _show_project_values(self):
         """Reporte le projet dans les paramètres (ouverture, nouveau projet)."""
@@ -359,7 +365,11 @@ class MainController(QtCore.QObject):
         if self._updating:
             return
         group = self.project_params.child("Dissipateur")
-        self.heatsink = self.heatsinks[group.child(P_REFERENCE).value()]
+        heatsink = self.heatsinks[group.child(P_REFERENCE).value()]
+        if heatsink is not self.heatsink:
+            # finition par défaut : celle pour laquelle la fiche est donnée
+            self.heatsink = heatsink
+            self.project_params.child("Conditions", P_BLACK).setValue(heatsink.anodised)
         self.length = group.child(P_LENGTH).value() / MM
         self._set_modified()
         self._plate_changed()
@@ -620,7 +630,14 @@ class MainController(QtCore.QObject):
                                      f"{sheet.rth_length * MM:g} mm"),
                            (H_RTH_F, f"{sheet.rth_forced:g} K/W à "
                                      f"{sheet.rth_length * MM:g} mm, "
-                                     f"{sheet.forced_speed:g} m/s")):
+                                     f"{sheet.forced_speed:g} m/s"),
+                           (H_ORIGIN, sheet.origin + (", anodisé noir" if sheet.anodised
+                                                      else "")),
+                           (H_WINDOW, f"{sheet.flow_area * 1e6:.0f} mm²"
+                                      + ("" if sheet.air_window else
+                                         " (largeur × hauteur d'ailettes)")),
+                           (H_METAL, f"× {sheet.y_factor:.2f} selon la longueur"
+                                     if sheet.metal_area else "non (masse inconnue)")):
             info.child(name).setValue(text)
         totals = self.heatsink_params.child("Résultats")
         readouts = self.source_params.child("Résultats")
@@ -634,7 +651,8 @@ class MainController(QtCore.QObject):
         totals.child(H_POWER).setValue(f"{result.power:.0f} W")
         totals.child(H_HOTTEST).setValue(f"{result.hottest:.1f} °C")
         totals.child(H_AIR_OUT).setValue(
-            f"{result.air_outlet:.1f} °C" if self.conditions.mode == FORCED else "—")
+            "—" if self.conditions.mode == NATURAL and self.conditions.horizontal
+            else f"{result.air_outlet:.1f} °C")
         if 0 <= self.selected < len(result.sources):
             item = result.sources[self.selected]
             readouts.child(R_SINK_MEAN).setValue(f"{item.sink_mean:.1f} °C")

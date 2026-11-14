@@ -17,6 +17,11 @@ Deux modes :
 Quelques couches dans l'épaisseur suffisent à rendre l'épanouissement de la chaleur sous
 une source petite devant l'épaisseur de la semelle.
 
+Conduction anisotrope (y_factor) : les ailettes d'un profilé extrudé sont continues sur
+toute la longueur. Elles conduisent la chaleur selon y, pas selon x. La conduction selon y
+est donc celle de toute la section de métal du profil, répartie sur l'épaisseur de la
+semelle ; selon x, celle de la semelle seule.
+
 Résolution : la semelle est homogène et ses bords isolés, et les canaux d'air sont
 indépendants les uns des autres ; une transformée en cosinus selon x découple donc le
 problème en nx systèmes bande (y, z, air), résolus directement. Un calcul prend quelques
@@ -88,13 +93,15 @@ class Solution:
 
 
 def solve(grid: Grid, conductivity: float, power: np.ndarray, ambient: float,
-          h: float, capacity_rate: float | None = None) -> Solution:
+          h: float, capacity_rate: float | None = None, y_factor: float = 1.0) -> Solution:
     """
     power           (ny, nx), W injectés par cellule sur la face de montage
     ambient         température de l'air à l'entrée (°C)
     h               coefficient d'échange ramené à la surface de la semelle (W/m2.K)
     capacity_rate   débit calorifique total de l'air, débit massique × cp (W/K) ;
-                    None : convection naturelle (air à ambient partout)
+                    None : air à ambient partout
+    y_factor        conduction selon y multipliée par ce facteur : les ailettes, continues
+                    sur toute la longueur, conduisent la chaleur dans ce sens et pas selon x
     """
     nx, ny, nz = grid.nx, grid.ny, grid.nz
     dx, dy, dz = grid.dx, grid.dy, grid.dz
@@ -126,7 +133,7 @@ def solve(grid: Grid, conductivity: float, power: np.ndarray, ambient: float,
     if nz > 1:
         couple(plate[:, :-1], plate[:, 1:], k * dx * dy / dz)
     if ny > 1:
-        couple(plate[:-1], plate[1:], k * dx * dz / dy)
+        couple(plate[:-1], plate[1:], y_factor * k * dx * dz / dy)
 
     bottom = plate[:, -1]
     # du centre de la dernière couche à l'air : demi-cellule de métal, puis h

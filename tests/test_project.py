@@ -201,7 +201,7 @@ def test_source_hors_semelle_ramenee_a_l_ouverture(ctrl, tmp_path):
 # ------------------------------------------------------------------ librairie
 def test_table_de_la_librairie(ctrl):
     rows = library_rows(ctrl)
-    assert [row[0] for row in rows] == ["Dissipateur"] * 2 + ["Source"] * 6
+    assert [row[0] for row in rows] == ["Dissipateur"] * 5 + ["Source"] * 6
     assert rows[1] == ["Dissipateur", "P300 83A", "Mecc.Al", "300 × 83 mm, semelle 11,7",
                        "0,23 / 0,078 K/W à 300 mm"]
     assert ["Source", "Module 62 mm", "Standard industriel", "61,4 × 106,4 mm",

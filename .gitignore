@@ -10,3 +10,6 @@ donnees_locales/
 build/
 dist/
 *.spec
+
+# essais de l'utilisateur (données internes, jamais versionnées)
+essais/

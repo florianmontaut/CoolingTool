@@ -79,8 +79,8 @@ def test_correctifs_de_convection_naturelle(p300):
 def test_hors_abaque_signale(p300):
     result = simulate(p300, 0.8, [module("Q1", 0.15, 0.4)], Conditions(FORCED, speed=12.0))
     assert len(result.warnings) == 2
-    assert "longueur 800 mm hors de l'abaque" in result.warnings[0]
-    assert "vitesse équivalente 12.0 m/s hors de l'abaque" in result.warnings[1]
+    assert "longueur 800 mm hors de la courbe de longueur" in result.warnings[0]
+    assert "vitesse équivalente 12.0 m/s hors de la courbe de vitesse" in result.warnings[1]
 
 
 def test_fiche_incoherente_refusee(p300):
@@ -106,10 +106,13 @@ def test_une_source_en_aval_d_une_autre_est_plus_chaude(p300):
     first, second = module("Q1", 0.15, 0.075), module("Q2", 0.15, 0.225)
     result = simulate(p300, 0.3, [first, second], conditions)
     upstream, downstream = (item.sink_mean for item in result.sources)
-    assert downstream - upstream > 1.0
-    # en convection naturelle le modèle ne distingue pas le haut du bas
+    assert downstream - upstream > 0.5
+    # en convection naturelle, ailettes verticales, l'air monte (y croissant) et s'échauffe
     natural = simulate(p300, 0.3, [first, second], Conditions(NATURAL))
-    assert natural.sources[0].sink_mean == pytest.approx(natural.sources[1].sink_mean)
+    assert natural.sources[1].sink_mean > natural.sources[0].sink_mean + 0.5
+    # ailettes horizontales : air à l'ambiante partout, plus de haut ni de bas
+    flat = simulate(p300, 0.3, [first, second], Conditions(NATURAL, horizontal=True))
+    assert flat.sources[0].sink_mean == pytest.approx(flat.sources[1].sink_mean)
 
 
 def test_une_source_seule_est_aussi_chaude_en_amont_qu_en_aval(p300):
@@ -191,3 +194,24 @@ def test_sans_puissance_tout_est_a_l_ambiante(p300):
                           Conditions(mode, ambient=55.0))
         assert result.surface == pytest.approx(55.0)
         assert result.sources[0].junction == pytest.approx(55.0)
+
+
+def test_air_qui_monte_en_convection_naturelle(p300):
+    conditions = Conditions(NATURAL, ambient=30.0)
+    result = simulate(p300, 0.3, [module("Q", 0.15, 0.15, 200.0)], conditions)
+    rise = result.surface.mean() - 30.0
+    # échauffement de l'air en haut des ailettes : natural_air_ratio × échauffement moyen
+    assert result.air_outlet - 30.0 == pytest.approx(p300.natural_air_ratio * rise, rel=0.02)
+    assert result.convected == pytest.approx(200.0)
+    # le haut de la semelle est plus chaud que le bas
+    assert result.surface[-1].mean() > result.surface[0].mean()
+
+
+def test_finition_anodisee_de_la_fiche(p300):
+    from model.simulation import finish_factor
+    anodised = dataclasses.replace(p300, anodised=True)
+    assert finish_factor(p300, True) == pytest.approx(0.9)
+    assert finish_factor(anodised, True) == pytest.approx(1.0)
+    assert finish_factor(anodised, False) == pytest.approx(1 / 0.9)
+    plain = calibrate(anodised, 0.3, Conditions(NATURAL))
+    assert plain.rth_target == pytest.approx(p300.rth_natural / 0.9)

@@ -1,13 +1,13 @@
 # model/simulation.py
 """
-Simulation d'un dissipateur de catalogue portant des sources de chaleur.
+Simulation d'un dissipateur portant des sources de chaleur.
 
-Le catalogue donne une résistance thermique globale, mesurée dans une condition d'essai
-précise (source uniforme au centre, couvrant la moitié de la semelle). Elle ne dit rien
-de la répartition des températures. On en tire donc un coefficient d'échange h, par
-calage : h est ajusté pour que le modèle, placé dans la condition d'essai, redonne la
-résistance du catalogue (corrigée par les abaques pour la longueur et la vitesse d'air
-voulues). Ce h sert ensuite au placement réel des sources.
+La fiche du dissipateur (catalogue ou mesures) donne une résistance thermique globale,
+dans une condition d'essai précise (source uniforme au centre, couvrant la moitié de la
+semelle). Elle ne dit rien de la répartition des températures. On en tire donc un
+coefficient d'échange h, par calage : h est ajusté pour que le modèle, placé dans la
+condition d'essai, redonne la résistance de la fiche (corrigée par ses courbes pour la
+longueur et la vitesse d'air voulues). Ce h sert ensuite au placement réel des sources.
 
 Hypothèses à connaître :
     - vitesse d'air : celle du conduit en amont, sur la section de la zone d'ailettes
@@ -16,9 +16,13 @@ Hypothèses à connaître :
       à la vitesse qui donnerait le même débit massique dans les conditions du catalogue
       (25 °C, niveau de la mer) ; la variation de conductivité et de viscosité de l'air
       avec la température est négligée ;
-    - convection naturelle : h varie comme l'échauffement moyen puissance 0,25, et comme
-      la racine de la pression (altitude). L'air est pris à la température ambiante
-      partout : son échauffement le long des ailettes n'est pas réparti.
+    - conduction : selon la longueur, toute la section de métal du profil (les ailettes
+      sont continues) ; selon la largeur, la semelle seule (Heatsink.y_factor) ;
+    - convection naturelle, ailettes verticales : y = 0 en bas. L'air monte le long des
+      ailettes et s'échauffe ; son échauffement en haut est fixé à natural_air_ratio fois
+      l'échauffement moyen de la semelle (0,35 : essai du KL-288). h varie comme
+      l'échauffement moyen puissance 0,25, et comme la racine de la pression (altitude) ;
+    - ailettes horizontales : air à la température ambiante partout.
 """
 import math
 from dataclasses import dataclass, field
@@ -137,29 +141,74 @@ def _mean_under(surface: np.ndarray, coverage: np.ndarray) -> float:
     return float((surface * coverage).sum() / coverage.sum())
 
 
+def _natural_rate(mean_rise: float, power: float, heatsink: Heatsink) -> float | None:
+    """Débit calorifique de l'air qui monte le long des ailettes (W/K)."""
+    if mean_rise <= 0 or power <= 0 or heatsink.natural_air_ratio <= 0:
+        return None
+    return power / (heatsink.natural_air_ratio * mean_rise)
+
+
+def _solve_natural(grid: Grid, heatsink: Heatsink, injected: np.ndarray, ambient: float,
+                   h: float, rate: float | None = None) -> tuple:
+    """
+    Convection naturelle, ailettes verticales : le débit d'air dépend de l'échauffement,
+    qui dépend du débit. Point fixe ; renvoie (solution, débit calorifique).
+    """
+    power = float(injected.sum())
+    if rate is None:
+        start = solve(grid, heatsink.conductivity, injected, ambient, h, None,
+                      heatsink.y_factor)
+        rate = _natural_rate(float(start.sink_face.mean()) - ambient, power, heatsink)
+        if rate is None:
+            return start, None
+    for _ in range(40):
+        solution = solve(grid, heatsink.conductivity, injected, ambient, h, rate,
+                         heatsink.y_factor)
+        updated = _natural_rate(float(solution.sink_face.mean()) - ambient, power, heatsink)
+        if updated is None:
+            return solution, rate
+        converged = abs(updated - rate) <= 1e-6 * rate
+        rate = updated
+        if converged:
+            break
+    return solve(grid, heatsink.conductivity, injected, ambient, h, rate,
+                 heatsink.y_factor), rate
+
+
+def finish_factor(heatsink: Heatsink, black_anodised: bool) -> float:
+    """
+    Correction de la Rth naturelle selon la finition voulue, sachant celle de la fiche :
+    une fiche donnée pour une surface anodisée noire n'est pas corrigée une seconde fois.
+    """
+    wanted = BLACK_ANODISED_FACTOR if black_anodised else 1.0
+    sheet = BLACK_ANODISED_FACTOR if heatsink.anodised else 1.0
+    return wanted / sheet
+
+
 @lru_cache(maxsize=512)
 def _calibrate(heatsink: Heatsink, length: float, mode: str, equivalent_speed: float,
                black_anodised: bool, horizontal: bool) -> Calibration:
     curves = heatsink.curves
     warnings = []
-    factor = curves.length_factor(length, heatsink.rth_length)
-    if not curves.length.covers(length):
-        warnings.append(f"longueur {length * 1000:.0f} mm hors de l'abaque "
-                        f"({curves.length.x_min * 1000:.0f} à "
-                        f"{curves.length.x_max * 1000:.0f} mm) : facteur extrapolé")
+    natural = mode == NATURAL
+    factor = curves.length_factor(length, heatsink.rth_length, natural)
+    length_curve = curves.length_curve(natural)
+    if not length_curve.covers(length):
+        warnings.append(f"longueur {length * 1000:.0f} mm hors de la courbe de longueur "
+                        f"({length_curve.x_min * 1000:.0f} à "
+                        f"{length_curve.x_max * 1000:.0f} mm) : facteur extrapolé")
     if mode == FORCED:
         target = heatsink.rth_forced * factor * curves.speed_factor(equivalent_speed,
                                                                     heatsink.forced_speed)
         if not curves.speed.covers(equivalent_speed):
             warnings.append(f"vitesse équivalente {equivalent_speed:.1f} m/s hors de "
-                            f"l'abaque ({curves.speed.x_min:g} à {curves.speed.x_max:g} "
-                            "m/s) : facteur extrapolé")
+                            f"la courbe de vitesse ({curves.speed.x_min:g} à "
+                            f"{curves.speed.x_max:g} m/s) : facteur extrapolé")
         capacity_rate = (air.REFERENCE_DENSITY * equivalent_speed * heatsink.flow_area
                          * air.CP_AIR)
         power = 100.0       # le problème est linéaire : valeur sans importance
     else:
-        target = heatsink.rth_natural * factor
-        target *= BLACK_ANODISED_FACTOR if black_anodised else 1.0
+        target = heatsink.rth_natural * factor * finish_factor(heatsink, black_anodised)
         target *= HORIZONTAL_FACTOR if horizontal else 1.0
         capacity_rate = None
         power = heatsink.natural_delta_t / target
@@ -169,8 +218,13 @@ def _calibrate(heatsink: Heatsink, length: float, mode: str, equivalent_speed: f
     coverage = grid.coverage(*catalogue_source_bounds(heatsink, length))
     injected = power * coverage / coverage.sum()
 
+    rising_air = natural and not horizontal
+
     def run(h: float) -> Solution:
-        return solve(grid, heatsink.conductivity, injected, 0.0, h, capacity_rate)
+        if rising_air:
+            return _solve_natural(grid, heatsink, injected, 0.0, h)[0]
+        return solve(grid, heatsink.conductivity, injected, 0.0, h, capacity_rate,
+                     heatsink.y_factor)
 
     def error(log_h: float) -> float:
         return _mean_under(run(math.exp(log_h)).surface, coverage) / power - target
@@ -235,16 +289,22 @@ def simulate(heatsink: Heatsink, length: float, sources, conditions: Conditions,
         coverages.append(coverage)
     # le solveur souffle de y = 0 vers y = longueur : on retourne la semelle si besoin
     flip = conditions.mode == FORCED and conditions.reversed_flow
-
-    def run(h: float) -> Solution:
-        return solve(grid, heatsink.conductivity, injected[::-1] if flip else injected,
-                     conditions.ambient, h, calibration.capacity_rate)
+    plate = injected[::-1] if flip else injected
+    rising_air = conditions.mode == NATURAL and not conditions.horizontal
 
     h = calibration.h
     if conditions.mode == NATURAL:
         h *= math.sqrt(air.pressure(conditions.altitude) / air.P_SEA_LEVEL)
         base_h = h
-        solution = run(h)
+
+        def run(h_value: float, rate: float | None) -> tuple:
+            if rising_air:
+                return _solve_natural(grid, heatsink, plate, conditions.ambient, h_value,
+                                      rate)
+            return solve(grid, heatsink.conductivity, plate, conditions.ambient, h_value,
+                         None, heatsink.y_factor), None
+
+        solution, rate = run(h, None)
         # h dépend de l'échauffement, qui dépend de h : point fixe (convergence rapide)
         for _ in range(30):
             rise = float(solution.sink_face.mean()) - conditions.ambient
@@ -253,11 +313,12 @@ def simulate(heatsink: Heatsink, length: float, sources, conditions: Conditions,
             updated = base_h * (rise / calibration.mean_rise) ** NATURAL_EXPONENT
             converged = abs(updated - h) <= 1e-5 * h
             h = updated
-            solution = run(h)
+            solution, rate = run(h, rate)
             if converged:
                 break
     else:
-        solution = run(h)
+        solution = solve(grid, heatsink.conductivity, plate, conditions.ambient, h,
+                         calibration.capacity_rate, heatsink.y_factor)
 
     surface = solution.surface[::-1] if flip else solution.surface
     air_out = solution.air_out[::-1] if flip else solution.air_out
